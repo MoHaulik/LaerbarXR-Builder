@@ -1,0 +1,2337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LærbarXR Builder</title>
+<script src="vendor/jszip.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#f8f9fa;
+  --surface:#ffffff;
+  --border:#e1e4e8;
+  --text:#24292f;
+  --accent:#0969da;
+  --accent-hover:#0860ca;
+  --green:#1a7f37;
+  --red:#d1242f;
+  --muted:#6e7781;
+  --grid:#e8eaed;
+  --shadow:0 1px 3px rgba(31,35,40,0.12);
+  --shadow-lg:0 8px 24px rgba(140,149,159,0.2);
+}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
+  background:var(--bg);color:var(--text);height:100vh;overflow:hidden
+}
+
+/* Layout */
+.app{display:flex;height:100vh}
+.panel{width:450px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;box-shadow:var(--shadow); z-index:20;}
+.canvas-wrap{flex:1;position:relative;overflow:hidden;background:var(--bg);cursor:grab}
+.canvas-wrap.panning{cursor:grabbing}
+/* Lærredet er en stor verden, der flyttes med translate+scale (origin 0 0).
+   Panorering = translate, zoom = scale; wrap klipper visningen. */
+.canvas{
+  width:6000px;height:4000px;position:relative;
+  transform-origin:0 0;
+  will-change:transform;
+}
+
+/* Panorering/zoom */
+.view-controls{
+  position:absolute;top:16px;left:16px;z-index:50;display:flex;gap:2px;
+  align-items:center;background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;padding:4px;box-shadow:var(--shadow);
+}
+.view-controls button{
+  background:transparent;border:none;border-radius:6px;padding:4px 10px;
+  cursor:pointer;font-size:13px;color:var(--text);transition:background 0.2s;
+}
+.view-controls button:hover{background:#f6f8fa}
+.view-controls .zoom-label{font-size:11px;color:var(--muted);padding:0 6px;min-width:40px;text-align:center}
+
+/* Paneler */
+.panel-header{padding:20px;border-bottom:1px solid var(--border)}
+.panel-header h1{font-size:20px;font-weight:600;margin-bottom:12px}
+.panel-tools{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;background:#fafbfc}
+.panel-content{flex:1;overflow-y:auto;padding:16px}
+.panel-footer{padding:16px;border-top:1px solid var(--border);background:#fafbfc}
+
+/* Inspektør */
+.inspector{display:none;animation:slideIn 0.3s ease}
+.inspector.active{display:block}
+@keyframes slideIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+
+/* Knapper og felter */
+.btn{
+  background:var(--accent);border:none;border-radius:6px;padding:8px 16px;
+  color:#fff;cursor:pointer;font-size:13px;font-weight:500;
+  transition:all 0.2s;display:inline-flex;align-items:center;justify-content:center;gap:6px
+}
+.btn:hover{background:var(--accent-hover);transform:translateY(-1px);box-shadow:var(--shadow)}
+.btn.secondary{background:transparent;border:1px solid var(--border);color:var(--text)}
+.btn.secondary:hover{background:#f6f8fa;border-color:var(--accent)}
+.btn.mini{padding:6px 10px;font-size:12px}
+.btn.danger{background:var(--red)}
+.btn.success{background:var(--green)}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+
+input,textarea,select{
+  width:100%;background:var(--surface);border:1px solid var(--border);
+  border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;
+  transition:border 0.2s
+}
+input[type="color"]{padding:2px 4px;height:30px;cursor:pointer;}
+input[type="range"]{padding:0;height:4px;background:var(--border);appearance:none;border-radius:2px;cursor:pointer;}
+input[type="range"]::-webkit-slider-thumb{appearance:none;width:12px;height:12px;background:var(--accent);border-radius:50%;}
+input:focus,textarea:focus,select:focus{
+  outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(9,105,218,0.1)
+}
+label{
+  display:block;margin:0 0 6px;font-size:12px;font-weight:600;color:var(--text)
+}
+
+.field-group{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;padding:16px;margin-bottom:16px
+}
+.field-group h3{font-size:14px;font-weight:600;margin-bottom:12px;color:var(--text)}
+
+.slider-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.slider-row label { margin:0; font-size: 11px; flex:1; display:flex; flex-direction:column; font-weight:normal; }
+.slider-row input[type=range] { width: 100%; margin-top: 4px; }
+
+/* Scener */
+.node{
+  position:absolute;width:160px;height:120px;border-radius:12px;
+  background:var(--surface);border:2px solid var(--border);
+  cursor:move;transition:all 0.2s;overflow:hidden;box-shadow:var(--shadow);
+  z-index:10;
+}
+.node:hover{transform:scale(1.02);box-shadow:var(--shadow-lg)}
+.node.selected{
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(9,105,218,0.1),var(--shadow-lg)
+}
+.node.start{border-color:var(--green)}
+/* Scenefarve (vises også grøn/rød på Dashboardets kort) */
+.node.scene-green{background:#dcfce7;box-shadow:inset 6px 0 0 #16a34a,var(--shadow)}
+.node.scene-red{background:#fee2e2;box-shadow:inset 6px 0 0 #dc2626,var(--shadow)}
+
+.node-thumb{
+  position:absolute;inset:0;background-size:cover;
+  background-position:center;opacity:0.3
+}
+.node-content{
+  position:relative;height:100%;display:flex;flex-direction:column;
+  padding:12px
+}
+.node-title{font-size:13px;font-weight:600;margin-bottom:4px;word-break:break-word;}
+.node-type{font-size:11px;color:var(--muted);margin-bottom:8px}
+.node-icons{
+  position:absolute;bottom:8px;left:12px;display:flex;gap:4px;
+  font-size:14px
+}
+.node-badge{
+  position:absolute;top:8px;right:8px;background:var(--green);
+  color:#fff;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600
+}
+
+/* Forbindelser */
+.connection{
+  position:absolute;pointer-events:none;z-index:1;width:100%;height:100%;left:0;top:0;
+}
+.connection svg{position:absolute;width:100%;height:100%;overflow:visible;}
+.connection path{fill:none;stroke-width:2;stroke-linecap:round;transition:stroke 0.3s, stroke-width 0.3s;}
+.connection.default path{stroke:#a0aec0;stroke-dasharray:5,5;animation:dash-flow 20s linear infinite;}
+.connection.correct path{stroke:var(--green);stroke-width:3;stroke-dasharray:8,4;animation:dash-flow-fast 10s linear infinite;}
+.connection.incorrect path{stroke:var(--red);stroke-width:2;stroke-dasharray:4,8;animation:dash-flow 15s linear infinite;}
+@keyframes dash-flow{to{stroke-dashoffset:-100}}
+@keyframes dash-flow-fast{to{stroke-dashoffset:-60}}
+
+/* Tilføj-menu */
+.add-menu{position:fixed;bottom:24px;right:24px;z-index:100}
+.add-btn{
+  width:56px;height:56px;border-radius:50%;background:var(--accent);
+  border:none;color:#fff;font-size:24px;cursor:pointer;
+  box-shadow:0 4px 12px rgba(9,105,218,0.3);transition:all 0.3s
+}
+.add-btn:hover{transform:rotate(90deg) scale(1.1);background:var(--accent-hover)}
+.add-options{
+  position:absolute;bottom:70px;right:0;display:none;
+  flex-direction:column;gap:8px;min-width:150px
+}
+.add-options.show{display:flex}
+.add-opt{
+  background:var(--surface);border:1px solid var(--border);
+  padding:10px 16px;border-radius:8px;white-space:nowrap;
+  cursor:pointer;font-size:13px;box-shadow:var(--shadow);
+  transition:all 0.2s
+}
+.add-opt:hover{background:var(--accent);color:#fff;transform:translateX(-4px)}
+
+/* Hurtighandlinger */
+.quick-actions{display:flex;gap:8px;margin-top:12px}
+.action-btn{
+  flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;
+  background:var(--surface);color:var(--text);font-size:12px;
+  cursor:pointer;transition:all 0.2s
+}
+.action-btn:hover{background:#f6f8fa;border-color:var(--accent)}
+
+/* Overlays */
+.overlay-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.overlay-item{
+  background:#f6f8fa;border:1px solid var(--border);
+  border-radius:6px;padding:10px;display:flex;flex-direction:column;gap:8px
+}
+.overlay-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.overlay-controls input[type="number"]{width:70px}
+.overlay-remove{
+  background:var(--red);border:none;color:#fff;
+  padding:4px 8px;border-radius:4px;cursor:pointer;
+  font-size:11px;transition:all 0.2s;margin-left:auto;
+}
+.overlay-remove:hover{background:#b91c1c}
+
+/* Preview */
+.preview-modal{
+  position:fixed;inset:0;background:rgba(0,0,0,0.8);
+  display:none;align-items:center;justify-content:center;z-index:1000
+}
+.preview-modal.show{display:flex}
+.preview-content{
+  background:var(--surface);border-radius:12px;
+  width:95%;max-width:1000px;height:85vh;
+  display:flex;flex-direction:column;box-shadow:var(--shadow-lg)
+}
+.preview-header{
+  padding:16px 20px;border-bottom:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center
+}
+.preview-header h2{font-size:18px;font-weight:600}
+.preview-body{
+  flex:1;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  padding:20px;overflow:auto;position:relative;background:#000;
+}
+.preview-nav{
+  padding:16px 20px;border-top:1px solid var(--border);
+  display:flex;justify-content:center;gap:12px;background:#fafbfc;
+}
+
+/* Medieliste */
+.asset-list-box {
+    margin-top:12px; font-size:11px; color:var(--text);
+}
+.asset-group { margin-bottom: 8px; }
+.asset-group-title { font-weight: 600; margin-bottom: 4px; font-size: 12px; }
+.asset-items { 
+    max-height: 120px; overflow-y: auto; background: #f6f8fa; 
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px;
+}
+.asset-item-row {
+    padding: 4px 6px; border-bottom: 1px solid var(--border);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.asset-item-row:last-child { border-bottom: none; }
+
+/* Status */
+.status{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+  background:var(--text);color:#fff;padding:12px 20px;
+  border-radius:8px;display:none;z-index:1001;box-shadow:var(--shadow-lg)
+}
+.status.show{display:block}
+
+/* Indlæsning */
+.loader{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  z-index:2000;background:rgba(255,255,255,0.95);padding:30px;
+  border-radius:12px;box-shadow:var(--shadow-lg);text-align:center;
+}
+.loader-spinner{
+  border:4px solid #f3f3f3;border-top:4px solid var(--accent);
+  border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;
+  margin:0 auto;
+}
+@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+.loader-text{margin-top:15px;font-size:14px;font-weight:600;color:var(--text)}
+
+/* Fælles overlays i preview */
+.preview-choice{
+  background:var(--surface);border:2px solid var(--border);color:var(--text);
+  padding:10px 16px;border-radius:8px;cursor:pointer;
+  transition:all 0.2s;text-align:center;font-size:14px; margin-top:8px;
+}
+.preview-choice:hover{
+  background:#f6f8fa;border-color:var(--accent);
+  transform:translateY(-2px);box-shadow:var(--shadow)
+}
+.preview-choice.correct{border-color:var(--green);background:#f0fdf4}
+.preview-choice.incorrect{border-color:var(--red);background:#fef2f2}
+</style>
+</head>
+<body>
+
+<datalist id="colorPresets">
+  <option value="#ffffff">White</option>
+  <option value="#e1e4e8">Gray</option>
+  <option value="#000000">Black</option>
+  <option value="#d1242f">Red</option>
+  <option value="#0969da">Blue</option>
+  <option value="#1a7f37">Green</option>
+</datalist>
+
+<div class="app">
+  <div class="panel">
+    <div class="panel-header">
+      <h1>🎬 LærbarXR Builder</h1>
+      <input id="projectTitle" placeholder="Navngiv din simulation..." value="Min 360°-simulation" onchange="App.saveState()">
+    </div>
+    
+    <div class="panel-tools">
+      <button class="btn secondary mini" onclick="App.undo()">↩ Undo</button>
+      <button class="btn secondary mini" onclick="App.preview()">▶ Start</button>
+      <button class="btn secondary mini" onclick="App.save()">💾 Save</button>
+      <button class="btn secondary mini" onclick="App.load()">📁 Vælg simulation</button>
+      <button class="btn secondary mini" onclick="App.goToAssets()">📦 Assets</button>
+      <input type="file" id="loader" accept=".lxr,.zip" style="display:none" onchange="App.loadFile(event)">
+    </div>
+    
+    <div class="panel-content">
+      <div id="inspector" class="inspector"></div>
+      
+      <div id="defaultView">
+        <div class="field-group">
+          <h3>🚀 Quick Start</h3>
+          <p style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.5">
+            Byg 360°-simulationer. Hver video kan have spørgsmål med svarbaseret navigation og tidsstyrede tekstoverlays.
+          </p>
+          <button class="btn" style="width:100%" onclick="App.addNode('video')">
+            + Add Video Node
+          </button>
+        </div>
+        
+        <div class="field-group" id="assetsLibrarySection">
+          <h3>📦 Assets Library</h3>
+          <div class="quick-actions">
+            <input type="file" id="videoFiles" accept="video/mp4,video/webm" multiple style="display:none" onchange="App.addVideos(event)">
+            <input type="file" id="imageFiles" accept="image/*" multiple style="display:none" onchange="App.addImages(event)">
+            <button class="action-btn" onclick="document.getElementById('videoFiles').click()">📹 Add Videos</button>
+            <button class="action-btn" onclick="document.getElementById('imageFiles').click()">🖼 Add Images</button>
+          </div>
+          
+          <div class="asset-list-box">
+             <div class="asset-group">
+                <div class="asset-group-title">Videos (<span id="videoCount">0</span>)</div>
+                <div class="asset-items" id="videoList"><i>No videos uploaded yet</i></div>
+             </div>
+             <div class="asset-group">
+                <div class="asset-group-title">Images (<span id="imageCount">0</span>)</div>
+                <div class="asset-items" id="imageList"><i>No images uploaded yet</i></div>
+             </div>
+          </div>
+        </div>
+        
+        <div class="field-group" id="projectSettings"></div>
+
+        <div class="field-group">
+          <h3>📊 Project Stats</h3>
+          <div style="font-size:12px;color:var(--muted);line-height:1.8">
+            Nodes: <strong id="nodeCount">0</strong><br>
+            Connections: <strong id="connectionCount">0</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="panel-footer">
+      <button class="btn success" style="width:100%" onclick="App.export()">
+        📦 Export WebXR Player Package (.zip)
+      </button>
+    </div>
+  </div>
+  
+  <div class="canvas-wrap">
+    <div id="canvas" class="canvas"></div>
+
+    <!-- Zoom / tilpas -->
+    <div class="view-controls">
+      <button onclick="App.zoomBy(1/1.2)" title="Zoom out">−</button>
+      <span class="zoom-label" id="zoomLabel">100%</span>
+      <button onclick="App.zoomBy(1.2)" title="Zoom in">＋</button>
+      <button onclick="App.fitView()" title="Fit all nodes in view">⊞ Fit</button>
+      <button onclick="App.resetView()" title="Reset pan &amp; zoom">1:1</button>
+    </div>
+    
+    <div class="add-menu">
+      <div id="addOptions" class="add-options">
+        <div class="add-opt" onclick="App.addNode('video')">🎥 Video Node</div>
+        <div class="add-opt" onclick="App.addNode('end')">🏁 End Node</div>
+      </div>
+      <button class="add-btn" onclick="App.toggleAddMenu()">+</button>
+    </div>
+  </div>
+</div>
+
+<!-- Preview -->
+<div class="preview-modal" id="previewModal">
+  <div class="preview-content">
+    <div class="preview-header">
+      <h2 id="previewTitle">Start</h2>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <!-- Sceneur, så man kan se at tidsstyret tekst, billeder og spørgsmål
+             dukker op til tiden. -->
+        <span id="previewClock" title="Time within this scene" style="font:600 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--muted); min-width:44px; text-align:right;">0.0s</span>
+        <button class="btn secondary" onclick="App.closePreview()">Close</button>
+      </div>
+    </div>
+    <div class="preview-body" id="previewBody">
+    </div>
+    <div class="preview-nav" id="previewNav">
+      <!-- Navigation -->
+    </div>
+  </div>
+</div>
+
+<div class="status" id="status"></div>
+
+<!-- Indlæsning -->
+<div class="loader" id="globalLoader" style="display:none">
+  <div class="loader-spinner"></div>
+  <div class="loader-text" id="loaderText">Processing...</div>
+</div>
+
+<script>
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+// ---- VALIDERING AF INPUT ----
+// Værdier fra en uploadet projektfil ender i style-attributter i preview (farve,
+// x, y, skala, billed-URL). En manipuleret værdi som `color: '#fff" onmouseover="..."'`
+// kunne køre script. Funktionerne her tvinger værdierne på plads, både ved
+// indlæsning og ved visning.
+function num(v, def, min, max){
+  var n = parseFloat(v);
+  if (!isFinite(n)) n = def;
+  if (min !== undefined) n = Math.max(min, n);
+  if (max !== undefined) n = Math.min(max, n);
+  return n;
+}
+// Kun #rgb / #rrggbb / rgb() / rgba(); alt andet → fallback.
+function safeColor(v, def){
+  if (typeof v !== 'string') return def;
+  var s = v.trim();
+  if (/^#[0-9a-fA-F]{3}$/.test(s) || /^#[0-9a-fA-F]{6}$/.test(s)) return s;
+  if (/^rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(,\s*[\d.]+\s*)?\)$/.test(s)) return s;
+  return def;
+}
+function safeWeight(v){ return (v === 'bold' || v === '600' || v === '700') ? v : 'normal'; }
+function safeAlign(v){ return (v === 'left' || v === 'right') ? v : 'center'; }
+// Afvis en mediesti, der er absolut eller går ud af sin mappe.
+function safeZipPath(p, prefix){
+  if (typeof p !== 'string' || !p) return null;
+  var s = p.replace(/\\/g, '/');
+  if (s.charAt(0) === '/' || s.indexOf('..') !== -1) return null;
+  return s.indexOf(prefix) === 0 ? s : null;
+}
+
+// Tving alle felter i et nyindlæst projekt ind i et sikkert interval/format, før
+// de når inspektøren eller preview.
+function sanitizeProject(p){
+  if (!p || typeof p !== 'object' || !Array.isArray(p.nodes)) return;
+  if (p.hideExit !== undefined) p.hideExit = p.hideExit === true;
+  if (p.idleTimeoutSec !== undefined) p.idleTimeoutSec = Math.round(num(p.idleTimeoutSec, 0, 0, 3600));
+  p.nodes.forEach(function(node){
+    node.x = num(node.x, 0, -100000, 100000);
+    node.y = num(node.y, 0, -100000, 100000);
+    node.duration = num(node.duration, 10, 0, 3600);
+    node.questionTime = num(node.questionTime, 0, 0, 3600);
+    node.questionX = num(node.questionX, 50, 0, 100);
+    node.questionY = num(node.questionY, 50, 0, 100);
+    node.questionScale = num(node.questionScale, 1, 0.1, 5);
+    // Startretning for scenens 360°/180°-video.
+    if (node.videoYaw !== undefined) node.videoYaw = num(node.videoYaw, 0, -180, 180);
+    if (node.gazeDwellSec !== undefined && node.gazeDwellSec !== null && node.gazeDwellSec !== '')
+      node.gazeDwellSec = num(node.gazeDwellSec, 2, 0.5, 10);
+    if (node.questionFontSize !== undefined) node.questionFontSize = num(node.questionFontSize, 50, 10, 200);
+    if (node.questionFontWeight !== undefined) node.questionFontWeight = safeWeight(node.questionFontWeight);
+    if (node.questionAlign !== undefined) node.questionAlign = safeAlign(node.questionAlign);
+    (node.textOverlays || []).forEach(function(t){
+      t.x = num(t.x, 50, 0, 100); t.y = num(t.y, 50, 0, 100); t.scale = num(t.scale, 1, 0.1, 5);
+      t.time = num(t.time, 0, 0, 3600); t.duration = num(t.duration, 3, 0, 3600);
+      t.color = safeColor(t.color, '#ffffff'); t.textColor = safeColor(t.textColor, '#000000');
+      if (t.fontSize !== undefined) t.fontSize = num(t.fontSize, 32, 10, 200);
+      if (t.fontWeight !== undefined) t.fontWeight = safeWeight(t.fontWeight);
+      if (t.align !== undefined) t.align = safeAlign(t.align);
+    });
+    (node.imageOverlays || []).forEach(function(io){
+      io.x = num(io.x, 50, 0, 100); io.y = num(io.y, 50, 0, 100); io.scale = num(io.scale, 1, 0.1, 5);
+      io.time = num(io.time, 0, 0, 3600); io.duration = num(io.duration, 5, 0, 3600);
+    });
+    // Nyere og valgfrie: Se igen, flervalg, scenefarve.
+    if (node.replayEnabled !== undefined) node.replayEnabled = node.replayEnabled === true;
+    if (node.replayTime !== undefined) node.replayTime = num(node.replayTime, 0, 0, 3600);
+    if (node.questionMode !== undefined) node.questionMode = node.questionMode === 'multi' ? 'multi' : 'single';
+    if (node.multiShowCount !== undefined) node.multiShowCount = node.multiShowCount === true;
+    if (node.sceneColor !== undefined) node.sceneColor = (node.sceneColor === 'green' || node.sceneColor === 'red') ? node.sceneColor : '';
+    (node.choices || []).forEach(function(c){
+      if (c.bgColor !== undefined) c.bgColor = safeColor(c.bgColor, '#0969da');
+      if (c.textColor !== undefined) c.textColor = safeColor(c.textColor, '#ffffff');
+      if (c.scale !== undefined) c.scale = num(c.scale, 1, 0.3, 3);
+    });
+  });
+}
+
+// === Koordinater ===
+// X og Y for overlays og spørgsmål er procent af hele kuglen: X 50 lige frem,
+// X 0 / X 100 lige bagud, Y 0 lige op, Y 100 lige ned.
+//
+// Tidligere blev de lagt på et fladt vindue (±45° x ±25°) foran eleven. Hvert
+// projekt gemmer, hvilket koordinatsystem det er lavet i. Projekter uden feltet
+// er gamle og vises på den gamle måde i Player. Åbnes et sådant projekt her,
+// konverteres det (se nedenfor) og eksporteres i det nye system.
+
+// Mindste størrelse. Lavere værdier var ikke læselige i et headset; Player
+// skalerer værdien op, og skalaen starter her.
+const MIN_SIZE = 1;
+// Kun svarbokse: må gå 30 % under den generelle grænse, hvis forfatteren vil.
+// Standard (1) og toppen af skalaen er uændret.
+const MIN_ANSWER_SIZE = 0.7;
+
+const COORD_LEGACY = 'legacy16x9';
+const COORD_SPHERE = 'sphere360';
+
+// Gammel procent → kugle-procent, samme retning:
+//   gammel yaw   = (x-50)/100 * 90   →  x' = 50 + (x-50) * 90/360
+//   gammel pitch = (50-y)/100 * 50   →  y' = 50 + (y-50) * 50/180
+function legacyXToSphere(x) { return Math.round((50 + (num(x, 50, 0, 100) - 50) * 0.25) * 10) / 10; }
+function legacyYToSphere(y) { return Math.round((50 + (num(y, 50, 0, 100) - 50) * (50 / 180)) * 10) / 10; }
+
+// Konverterer et projekt fra før 2026-09-25 til det nuværende system (in place)
+// og løfter størrelser under MIN_SIZE op til grænsen.
+function migrateCoordSpace(p) {
+  if (!p || typeof p !== 'object') return false;
+  if (p.coordSpace === COORD_SPHERE) return false;
+  (p.nodes || []).forEach(function(node) {
+    if (node.questionX !== undefined) node.questionX = legacyXToSphere(node.questionX);
+    if (node.questionY !== undefined) node.questionY = legacyYToSphere(node.questionY);
+    if (node.questionScale !== undefined) node.questionScale = Math.max(MIN_SIZE, num(node.questionScale, 1, 0.1, 5));
+    (node.textOverlays || []).forEach(function(t) {
+      t.x = legacyXToSphere(t.x); t.y = legacyYToSphere(t.y);
+      t.scale = Math.max(MIN_SIZE, num(t.scale, 1, 0.1, 5));
+    });
+    (node.imageOverlays || []).forEach(function(io) {
+      io.x = legacyXToSphere(io.x); io.y = legacyYToSphere(io.y);
+    });
+    (node.choices || []).forEach(function(c) {
+      if (c.scale !== undefined) c.scale = Math.max(MIN_SIZE, num(c.scale, 1, 0.3, 3));
+    });
+  });
+  p.coordSpace = COORD_SPHERE;
+  return true;
+}
+
+
+const App = {
+  project: {
+    title: "Min 360°-simulation",
+    startNode: null,
+    coordSpace: COORD_SPHERE,
+    // Afslut vises, og et headset der ligger stille i 60 s, afsluttes og holdes
+    // ude af klassens data. Ældre projekter mangler felterne, hvilket Player
+    // læser som "Afslut vises, ingen inaktivitetsregel".
+    hideExit: false,
+    idleTimeoutSec: 60,
+    nodes: [],
+    connections: [],
+    assets: { videos: [], images: [] }
+  },
+  
+  history: [],
+  historyIndex: -1,
+  isUndoing: false,
+
+  // Kamera: skærm = verden * scale + (x, y)
+  view: { x: 0, y: 0, scale: 1 },
+
+  selectedNode: null,
+  dragging: null,
+  dragOffset: {x:0, y:0},
+  _assetsNeedRelink: false,
+  previewState: {
+    currentNode: null,
+    history: [],
+    videoTime: 0,
+    overlayTimer: null,
+    videoFailed: false
+  },
+  
+  init: function() {
+    var self = this;
+
+    // Beskeder fra den indlejrede Player-preview (se PLAYER_PREVIEW_URL /
+    // renderPreviewNode). Kun fra netop den iframe; alt andet ignoreres.
+    window.addEventListener('message', function(e) {
+      var frame = document.getElementById('previewPlayerFrame');
+      if (!frame || e.source !== frame.contentWindow) return;
+      var msg = e.data;
+      if (!msg || typeof msg !== 'object') return;
+      self._onPreviewFrameMessage(msg);
+    });
+
+    // Panorering (træk i tomt lærred) og zoom med hjulet. Et "klik" er en
+    // panorering under 4 px og fravælger scenen.
+    this.initPanZoom();
+    
+    document.getElementById('projectTitle').addEventListener('input', function(e) {
+      self.project.title = e.target.value;
+    });
+    
+    document.addEventListener('keydown', function(e) {
+      if(e.key === 'Delete' && self.selectedNode && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        self.deleteNode();
+      }
+    });
+    
+    // Spørg før en autogemt kladde gendannes (viser titel og tidspunkt), og
+    // start forfra, hvis der svares nej.
+    var draft = localStorage.getItem('lxr_autosave');
+    if (draft) {
+        try {
+            var wrap = JSON.parse(draft);
+            // Ældre builds gemte projektet direkte; nyere pakker det ind med savedAt.
+            var parsed = (wrap && wrap.project) ? wrap.project : wrap;
+            var savedAt = (wrap && wrap.savedAt) ? new Date(wrap.savedAt) : null;
+            if (parsed && parsed.nodes && parsed.nodes.length > 0) {
+                var when = savedAt ? savedAt.toLocaleString() : 'an earlier session';
+                var resume = confirm('Resume your last project?\n\n"' + (parsed.title || 'Untitled') +
+                                     '"\nsaved ' + when + '\n\nOK = resume  ·  Cancel = start fresh');
+                if (resume) {
+                    sanitizeProject(parsed);
+                    migrateCoordSpace(parsed);
+                    this.project = parsed;
+                    if (!this.project.assets) this.project.assets = { videos: [], images: [] };
+                    if (!this.project.assets.videos) this.project.assets.videos = [];
+                    if (!this.project.assets.images) this.project.assets.images = [];
+                    // Fjern binære rester, også det gamle "fileObj:{}", som fik
+                    // JSZip til at fejle med "Can't read the data of videos/...mp4".
+                    this.project.assets.videos.forEach(function(v){ v.fileObj = null; v.url = null; v.thumb = null; });
+                    this.project.assets.images.forEach(function(i){ i.fileObj = null; i.url = null; });
+                    this._assetsNeedRelink = (this.project.assets.videos.length + this.project.assets.images.length) > 0;
+                    document.getElementById('projectTitle').value = this.project.title;
+                } else {
+                    try { localStorage.removeItem('lxr_autosave'); } catch(e) {}
+                }
+            }
+        } catch(e) {}
+    }
+
+    if (!this.project.nodes || this.project.nodes.length === 0) {
+        // Nyt projekt starter med en videoscene
+        this.addNode('video', 100, 150, true);
+    }
+
+    this.renderCanvas();
+    this.updateStats();
+    this.updateAssetLists();
+    this.saveState();
+
+    // Første fitView skal vente, til lærredet har en rigtig størrelse. Måles det
+    // til 0 px (under DOMContentLoaded), låses zoomen på 20 %. Derfor udskydes
+    // den til en frame, springes over ved 0, og gentages ved resize.
+    var self2 = this;
+    requestAnimationFrame(function(){
+        if (self2.project.nodes.length > 1) self2.fitView(); else self2.applyView();
+    });
+    window.addEventListener('resize', function(){ self2.applyView(); });
+    var wrapEl = document.querySelector('.canvas-wrap');
+    if (window.ResizeObserver && wrapEl) {
+        var firstFit = false;
+        new ResizeObserver(function(){
+            // Første måling over 0: tilpas visningen.
+            if (!firstFit && wrapEl.clientWidth > 0) {
+                firstFit = true;
+                if (self2.project.nodes.length > 1) self2.fitView(); else self2.applyView();
+            }
+        }).observe(wrapEl);
+    }
+
+    if (this._assetsNeedRelink) {
+        this.showStatus('Recovered project layout — open your saved .zip (Load) to restore videos & images');
+    }
+  },
+
+  // ---- FORTRYD OG AUTOGEM ----
+  saveState: function() {
+      if (this.isUndoing) return;
+      
+      // Ryd fremtidig historik, hvis der ændres efter en fortryd
+      if (this.historyIndex < this.history.length - 1) {
+          this.history = this.history.slice(0, this.historyIndex + 1);
+      }
+
+      var self = this;
+
+      // ---- Fortryd i hukommelsen ----
+      // Fjern File-objekter før kloning og sæt de rigtige referencer på igen,
+      // så medier stadig virker efter fortryd.
+      var clone = JSON.parse(JSON.stringify(this.project, function(key, value) {
+          if (key === 'fileObj') return undefined;
+          return value;
+      }));
+      clone.assets.videos.forEach(function(v) {
+          var orig = self.project.assets.videos.find(function(o){ return o.id === v.id; });
+          if (orig) v.fileObj = orig.fileObj;
+      });
+      clone.assets.images.forEach(function(img) {
+          var orig = self.project.assets.images.find(function(o){ return o.id === img.id; });
+          if (orig) img.fileObj = orig.fileObj;
+      });
+
+      this.history.push(clone);
+      this.historyIndex++;
+
+      // Loft over fortryd-stakken; hvert snapshot har alle thumbnails som data-URL.
+      var MAX_HISTORY = 50;
+      if (this.history.length > MAX_HISTORY) {
+          this.history.splice(0, this.history.length - MAX_HISTORY);
+      }
+      this.historyIndex = this.history.length - 1;
+
+      // ---- Autogem i localStorage: kun struktur ----
+      // Aldrig File, blob-URL'er eller base64 her. En File bliver til {} i JSON,
+      // og det gav et "fileObj:{}", der fik ZIP-eksporten til at fejle. Store
+      // thumbnails sprænger kvoten på ~5 MB, og så stopper autogem stille.
+      try {
+          var lightProject = JSON.parse(JSON.stringify(this.project, function(key, value) {
+              if (key === 'fileObj' || key === 'url' || key === 'data' || key === 'thumb') return undefined;
+              return value;
+          }));
+          // savedAt, så spørgsmålet om at gendanne kan vise tidspunktet.
+          localStorage.setItem('lxr_autosave', JSON.stringify({ savedAt: Date.now(), project: lightProject }));
+      } catch (e) {
+          /* fuld kvote / privat tilstand: spring autogem over */
+      }
+  },
+
+  undo: function() {
+      if (this.historyIndex > 0) {
+          this.isUndoing = true;
+          this.historyIndex--;
+          var restoredState = this.history[this.historyIndex];
+          
+          this.project = JSON.parse(JSON.stringify(restoredState));
+          document.getElementById('projectTitle').value = this.project.title;
+          
+          // Sæt blobs på igen
+          this.project.assets.videos.forEach(function(v) {
+              var orig = restoredState.assets.videos.find(function(o){ return o.id === v.id; });
+              if (orig) v.fileObj = orig.fileObj;
+          });
+          this.project.assets.images.forEach(function(img) {
+              var orig = restoredState.assets.images.find(function(o){ return o.id === img.id; });
+              if (orig) img.fileObj = orig.fileObj;
+          });
+
+          this.renderCanvas();
+          this.updateStats();
+          this.updateAssetLists();
+
+          if(this.selectedNode) {
+              var stillExists = this.project.nodes.find(n => n.id === this.selectedNode.id);
+              if(stillExists) {
+                  this.selectedNode = stillExists;
+                  this.showInspector(stillExists);
+              } else {
+                  this.deselect();
+              }
+          }
+          this.isUndoing = false;
+          this.showStatus('Undo successful');
+      } else {
+          this.showStatus('Nothing to undo');
+      }
+  },
+  
+  // ---- SCENER ----
+  addNode: function(type, x, y, skipSave) {
+    // Ny scene placeres midt i den aktuelle visning, så den aldrig havner uden for skærmen.
+    if (x === undefined || y === undefined) {
+      var wrap = document.querySelector('.canvas-wrap');
+      var cx = (wrap.clientWidth / 2 - this.view.x) / this.view.scale;
+      var cy = (wrap.clientHeight / 2 - this.view.y) / this.view.scale;
+      x = Math.max(0, cx - 80 + (Math.random() * 120 - 60));
+      y = Math.max(0, cy - 60 + (Math.random() * 80 - 40));
+    }
+    
+    var node = {
+      id: 'node_' + Date.now() + Math.random().toString(36).substr(2,4),
+      type: type,
+      x: x,
+      y: y,
+      title: type === 'video' ? 'Video Scene' : 'End Scene',
+      video: null,
+      imageOverlays: [],
+      textOverlays: [],
+      question: '',
+      questionTime: 0,
+      questionX: 50,
+      questionY: 50,
+      questionScale: 1.0,
+      choices: [],
+      duration: 10,
+      defaultNext: null,
+      outcome: type === 'end' ? 'complete' : null
+    };
+    
+    this.project.nodes.push(node);
+    if(!this.project.startNode) this.project.startNode = node.id;
+
+    this.createNodeElement(node);
+    this.updateConnections();
+    this.updateStats();
+    // Hold hele grafen på skærmen; hver strukturændring tilpasser visningen.
+    this.fitView();
+
+    if(!skipSave) this.saveState();
+    return node;
+  },
+  
+  renderCanvas: function() {
+      document.getElementById('canvas').innerHTML = '';
+      var self = this;
+      this.project.nodes.forEach(n => self.createNodeElement(n));
+      this.updateConnections();
+  },
+
+  createNodeElement: function(node) {
+    var old = document.getElementById(node.id);
+    if(old) old.remove();
+
+    var el = document.createElement('div');
+    el.className = 'node';
+    if(this.project.startNode === node.id) el.className += ' start';
+    if(node.sceneColor === 'green' || node.sceneColor === 'red') el.className += ' scene-' + node.sceneColor;
+    if(this.selectedNode && this.selectedNode.id === node.id) el.className += ' selected';
+    
+    el.id = node.id;
+    el.style.left = node.x + 'px';
+    el.style.top = node.y + 'px';
+    
+    var thumb = '';
+    if(node.video) {
+      var asset = this.project.assets.videos.find(function(v) { return v.id === node.video; });
+      if(asset && asset.thumb) {
+        thumb = '<div class="node-thumb" style="background-image:url(\'' + asset.thumb + '\')"></div>';
+      }
+    }
+    
+    var icons = [];
+    if(node.video) icons.push('🎬');
+    if(node.imageOverlays && node.imageOverlays.length) icons.push('🖼');
+    if(node.textOverlays && node.textOverlays.length) icons.push('📝');
+    if(node.question || (node.choices && node.choices.length)) icons.push(node.questionMode === 'multi' ? '☑️' : '❓');
+    if(node.replayEnabled && node.type !== 'end') icons.push('↻');
+    
+    var iconsHtml = icons.length ? '<div class="node-icons">' + icons.join(' ') + '</div>' : '';
+    var badge = this.project.startNode === node.id ? '<div class="node-badge">START</div>' : '';
+    
+    el.innerHTML = thumb +
+      '<div class="node-content">' +
+        '<div class="node-title">' + esc(node.title) + '</div>' +
+        '<div class="node-type">' + node.type.toUpperCase() + '</div>' +
+        iconsHtml +
+      '</div>' +
+      badge;
+    
+    var self = this;
+    el.addEventListener('mousedown', function(e) { self.startDrag(e, node); });
+    el.addEventListener('click', function(e) {
+      e.stopPropagation();
+      self.selectNode(node);
+    });
+    
+    document.getElementById('canvas').appendChild(el);
+  },
+  
+  selectNode: function(node) {
+    var nodes = document.querySelectorAll('.node');
+    for(var i = 0; i < nodes.length; i++) {
+      nodes[i].classList.remove('selected');
+    }
+    document.getElementById(node.id).classList.add('selected');
+    this.selectedNode = node;
+    this.showInspector(node);
+  },
+  
+  deselect: function() {
+    var nodes = document.querySelectorAll('.node');
+    for(var i = 0; i < nodes.length; i++) {
+      nodes[i].classList.remove('selected');
+    }
+    this.selectedNode = null;
+    document.getElementById('inspector').classList.remove('active');
+    document.getElementById('defaultView').style.display = 'block';
+  },
+
+  // Genvej til mediebiblioteket, som kun findes i sidepanelet, når intet er
+  // valgt. Ellers skal man først finde ud af at fravælge scenen.
+  goToAssets: function() {
+    this.deselect();
+    var el = document.getElementById('assetsLibrarySection');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  },
+  
+  // ---- INSPEKTØR ----
+  showInspector: function(node) {
+    // Håndredigerede eller fremmede filer kan have et spørgsmål uden choices.
+    if (!Array.isArray(node.choices)) node.choices = [];
+
+    var inspector = document.getElementById('inspector');
+    document.getElementById('defaultView').style.display = 'none';
+    
+    var html = '<div class="field-group">';
+    html += '<h3>📝 ' + node.type.charAt(0).toUpperCase() + node.type.slice(1) + ' Properties</h3>';
+    html += '<label>Title</label>';
+    html += '<input value="' + esc(node.title) + '" onchange="App.updateNode(\'title\', this.value)">';
+    
+    // Varighed gælder også slutscener: hvor længe Player viser slutskærmen.
+    html += '<label style="margin-top:8px;">' + (node.type === 'end' ? 'Completion screen duration (seconds)' : 'Duration (seconds)') + '</label>';
+    html += '<input type="number" value="' + node.duration + '" onchange="App.updateNode(\'duration\', this.value)">';
+    // Scenefarve: grøn/rød her og på Dashboardets livekort, så man hurtigt
+    // kan se, hvor eleverne endte.
+    var sc = node.sceneColor || '';
+    html += '<label style="margin-top:8px;" title="Farver scenen grøn eller rød i Dashboardet (og her), så læreren kan se om eleverne er endt i en rigtig eller forkert scene.">Markering i Dashboard</label>';
+    html += '<select onchange="App.updateNode(\'sceneColor\', this.value)">' +
+            '<option value=""' + (sc === '' ? ' selected' : '') + '>Ingen</option>' +
+            '<option value="green"' + (sc === 'green' ? ' selected' : '') + '>🟢 Grøn — rigtig</option>' +
+            '<option value="red"' + (sc === 'red' ? ' selected' : '') + '>🔴 Rød — forkert</option></select>';
+    html += '</div>';
+    
+    if(node.type !== 'end') {
+      // Baggrundsvideo
+      html += '<div class="field-group">';
+      if(this.project.assets.videos.length === 0) {
+          html += '<h3 style="cursor:pointer; color:var(--accent); text-decoration:underline;" onclick="App.deselect()" title="Go to Assets Library">🎬 360° Video (Upload in Assets)</h3>';
+      } else {
+          html += '<h3>🎬 360° Video</h3>';
+      }
+      html += '<select onchange="App.updateNode(\'video\', this.value)">';
+      html += '<option value="">No video</option>';
+      for(var i = 0; i < this.project.assets.videos.length; i++) {
+        var v = this.project.assets.videos[i];
+        html += '<option value="' + v.id + '"' + (node.video === v.id ? ' selected' : '') + '>' + esc(v.name) + '</option>';
+      }
+      html += '</select>';
+      // Startretning. En 360°/180°-video har ingen naturlig "front"; det er
+      // retningen eleven ser, når scenen starter. Skriver node.videoYaw, som
+      // preview henter ved næste poll (400 ms), og som Player bruger til at
+      // dreje videokuglen.
+      var vYaw = (node.videoYaw !== undefined ? node.videoYaw : 0);
+      html += '<label style="margin-top:10px" title="Hvilken del af 360°-optagelsen eleven kigger på, når scenen starter. Enhver vinkel hele vejen rundt kan vælges. 0° = som optaget.">🧭 Startretning — drej sidelæns (fri vinkel, hele vejen rundt)</label>';
+      html += '<div style="display:flex;align-items:center;gap:8px">';
+      // step=1 over hele -180..180. Kun vandret, fordi Player kun bruger yaw
+      // (videoMesh.rotation.y); horisonten skal forblive vandret.
+      html += '<input type="range" min="-180" max="180" step="1" value="' + vYaw + '" oninput="this.nextElementSibling.value=this.value" onchange="App.updateNode(\'videoYaw\', this.value)">';
+      // Indtastet værdi, fx 160. Over ±180 regnes om (270 → -90), så 0-360 også virker.
+      html += '<input type="number" step="1" value="' + vYaw + '" title="Skriv en vinkel, fx 160" style="width:64px;font:600 12px/1 ui-monospace,Menlo,monospace;text-align:right" oninput="var r=this.previousElementSibling,v=App._wrapYaw(this.value);if(this.value!==\'\'&&isFinite(parseFloat(this.value)))r.value=v" onchange="App.updateNode(\'videoYaw\', App._wrapYaw(this.value)); App.showInspector(App.selectedNode)"><span style="font:600 12px/1 ui-monospace,Menlo,monospace">°</span>';
+      html += '<button class="btn secondary mini" title="Sæt tilbage til 0° (som optaget)" onclick="App.updateNode(\'videoYaw\', 0); App.showInspector(App.selectedNode)">Nulstil</button>';
+      html += '</div>';
+      html += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:2px"><span>−180° (bagud)</span><span>0° som optaget</span><span>+180° (bagud)</span></div>';
+      html += '<div style="font-size:10px;color:var(--muted);margin-top:2px">Kun vandret retning — horisonten forbliver vandret.</div>';
+      html += '</div>';
+
+      // "↻ Se igen": knap ved siden af Afslut, der starter scenens video forfra.
+      html += '<div class="field-group">';
+      html += '<h3>↻ Se igen-knap</h3>';
+      html += '<label style="display:flex;align-items:center;gap:6px;font-weight:normal"><input type="checkbox" style="width:auto"' + (node.replayEnabled ? ' checked' : '') + ' onchange="App.updateNode(\'replayEnabled\', this.checked)"> Vis "Se igen" i VR — kig på den for at starte videoen forfra</label>';
+      if (node.replayEnabled) {
+        html += '<label style="margin-top:6px;font-weight:normal">Vises efter (sek): <input type="number" step="0.5" min="0" style="width:80px" value="' + (node.replayTime !== undefined ? node.replayTime : 0) + '" onchange="App.updateNode(\'replayTime\', this.value)"></label>';
+      }
+      html += '</div>';
+    }
+
+    // Billeder og tekst kan bruges på alle scenetyper, også 'end', så der kan
+    // vises en slutskærm.
+    {
+      // Billeder
+      html += '<div class="field-group">';
+      if(this.project.assets.images.length === 0) {
+          html += '<h3 style="cursor:pointer; color:var(--accent); text-decoration:underline;" onclick="App.deselect()" title="Go to Assets Library">🖼 Image Overlays (Upload in Assets)</h3>';
+      } else {
+          html += '<h3>🖼 Image Overlays</h3>';
+      }
+      html += '<div class="overlay-list">';
+      if(node.imageOverlays) {
+        for(var imgIdx = 0; imgIdx < node.imageOverlays.length; imgIdx++) {
+          var io = node.imageOverlays[imgIdx];
+          html += '<div class="overlay-item">';
+          html += '<div class="overlay-controls">';
+          html += '<select onchange="App.updateOverlay(\'image\', ' + imgIdx + ', \'imageId\', this.value)" style="flex:1;">';
+          html += '<option value="">Select Image...</option>';
+          this.project.assets.images.forEach(a => {
+            html += '<option value="' + a.id + '"' + (io.imageId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>';
+          });
+          html += '</select>';
+          html += '<button class="overlay-remove" onclick="App.removeOverlay(\'image\', ' + imgIdx + ')">×</button>';
+          html += '</div>';
+
+          html += '<div class="overlay-controls" style="margin-top:4px;">';
+          html += '<label style="margin:0">Start (sec): <input type="number" step="0.5" value="'+(io.time !== undefined ? io.time : 0)+'" onchange="App.updateOverlay(\'image\','+imgIdx+',\'time\',this.value)"></label>';
+          html += '<label style="margin:0">Dur (sec): <input type="number" step="0.5" value="'+(io.duration !== undefined ? io.duration : 5)+'" onchange="App.updateOverlay(\'image\','+imgIdx+',\'duration\',this.value)"></label>';
+          html += '</div>';
+
+          html += this._posSliderRow(
+            (io.x !== undefined ? io.x : 50), (io.y !== undefined ? io.y : 50), (io.scale !== undefined ? io.scale : 1),
+            'App.updateOverlay(\'image\','+imgIdx+',\'x\',this.value)',
+            'App.updateOverlay(\'image\','+imgIdx+',\'y\',this.value)',
+            'App.updateOverlay(\'image\','+imgIdx+',\'scale\',this.value)');
+          html += '</div>';
+        }
+      }
+      html += '</div>';
+      html += '<button class="btn secondary mini" style="width:100%; margin-top:8px;" onclick="App.addOverlay(\'image\')">+ Add Image Overlay</button>';
+      html += '</div>';
+
+      // Tekst
+      html += '<div class="field-group">';
+      html += '<h3>📱 Text Overlays</h3>';
+      html += '<div class="overlay-list">';
+      if(node.textOverlays) {
+        for(var t = 0; t < node.textOverlays.length; t++) {
+          var overlay = node.textOverlays[t];
+          html += '<div class="overlay-item">';
+          html += '<textarea rows="2" placeholder="Text content..." onchange="App.updateOverlay(\'text\', ' + t + ', \'text\', this.value)">' + esc(overlay.text || '') + '</textarea>';
+          
+          html += '<div class="overlay-controls" style="margin-top:4px; flex-wrap:wrap;">';
+          html += '<label style="margin:0">Start (sec): <input type="number" step="0.5" value="'+(overlay.time !== undefined ? overlay.time : 0)+'" onchange="App.updateOverlay(\'text\', '+t+', \'time\', this.value)"></label>';
+          html += '<label style="margin:0">Dur (sec): <input type="number" step="0.5" value="'+(overlay.duration !== undefined ? overlay.duration : 3)+'" onchange="App.updateOverlay(\'text\', '+t+', \'duration\', this.value)"></label>';
+          html += '<label style="margin:0; display:flex; align-items:center; gap:4px;" title="Background Color">BG: <input type="color" list="colorPresets" value="'+(overlay.color||'#ffffff')+'" onchange="App.updateOverlay(\'text\', '+t+', \'color\', this.value)"><span style="font-family:monospace;font-size:10px;background:#eee;padding:2px 4px;border-radius:4px;border:1px solid #ddd;">'+(overlay.color||'#ffffff')+'</span></label>';
+          html += '<label style="margin:0; display:flex; align-items:center; gap:4px;" title="Text Color">Txt: <input type="color" list="colorPresets" value="'+(overlay.textColor||'#000000')+'" onchange="App.updateOverlay(\'text\', '+t+', \'textColor\', this.value)"><span style="font-family:monospace;font-size:10px;background:#eee;padding:2px 4px;border-radius:4px;border:1px solid #ddd;">'+(overlay.textColor||'#000000')+'</span></label>';
+          html += '<button class="overlay-remove" onclick="App.removeOverlay(\'text\', ' + t + ')">×</button>';
+          html += '</div>';
+
+          // Skriftstørrelse, vægt og justering. Standardværdierne giver det gamle udseende.
+          html += '<div class="overlay-controls" style="margin-top:4px; flex-wrap:wrap;">';
+          html += '<label style="margin:0">Font: <input type="number" step="2" min="10" max="200" style="width:64px" value="'+(overlay.fontSize !== undefined ? overlay.fontSize : 32)+'" onchange="App.updateOverlay(\'text\','+t+',\'fontSize\',this.value)"></label>';
+          html += '<label style="margin:0">Weight: <select onchange="App.updateOverlay(\'text\','+t+',\'fontWeight\',this.value)" style="width:auto"><option value="normal"'+((overlay.fontWeight||'normal')==='normal'?' selected':'')+'>Normal</option><option value="700"'+((overlay.fontWeight||'normal')==='700'?' selected':'')+'>Bold</option></select></label>';
+          html += '<label style="margin:0">Align: <select onchange="App.updateOverlay(\'text\','+t+',\'align\',this.value)" style="width:auto"><option value="center"'+((overlay.align||'center')==='center'?' selected':'')+'>Center</option><option value="left"'+((overlay.align||'center')==='left'?' selected':'')+'>Left</option><option value="right"'+((overlay.align||'center')==='right'?' selected':'')+'>Right</option></select></label>';
+          html += '</div>';
+
+          html += this._posSliderRow(
+            (overlay.x !== undefined ? overlay.x : 50), (overlay.y !== undefined ? overlay.y : 50), (overlay.scale !== undefined ? overlay.scale : 1),
+            'App.updateOverlay(\'text\','+t+',\'x\',this.value)',
+            'App.updateOverlay(\'text\','+t+',\'y\',this.value)',
+            'App.updateOverlay(\'text\','+t+',\'scale\',this.value)');
+
+          html += '</div>';
+        }
+      }
+      html += '</div>';
+      html += '<button class="btn secondary mini" style="width:100%; margin-top:8px;" onclick="App.addOverlay(\'text\')">+ Add Text Overlay</button>';
+      html += '</div>';
+    }
+
+    if(node.type !== 'end') {
+      // Spørgsmål
+      html += '<div class="field-group">';
+      html += '<h3>❓ Question & Navigation</h3>';
+      html += '<label>Question (optional)</label>';
+      html += '<textarea rows="2" placeholder="Ask a question..." onchange="App.updateNode(\'question\', this.value)">' + esc(node.question || '') + '</textarea>';
+
+      // Kigge-tid pr. scene. Tom = standard 2,0 s. Svære valg kan kræve længere tid.
+      html += '<div class="overlay-controls" style="margin-top:8px;">';
+      html += '<label style="margin:0" title="How long the learner must hold their gaze to select an answer. Blank = 2.0s default.">Gaze dwell (sec): <input type="number" step="0.1" min="0.5" max="10" placeholder="2.0" value="'+(node.gazeDwellSec !== undefined && node.gazeDwellSec !== null ? node.gazeDwellSec : '')+'" onchange="App.updateNode(\'gazeDwellSec\', this.value)"></label>';
+      html += '</div>';
+
+      if(node.question) {
+        html += '<div class="overlay-controls" style="margin-top:8px; flex-wrap:wrap;">';
+        // Hed før "Show Time". Styrer hvornår spørgsmål og svar vises, som et
+        // overlays Start (sec). Et spørgsmål har ingen varighed; det står, til
+        // der er svaret.
+        html += '<label style="margin:0" title="How many seconds into the video the question and its answers should appear. The video keeps playing until then — same idea as Start (sec) on an image or text overlay.">Appears at (sec): <input type="number" step="0.5" min="0" value="'+(node.questionTime !== undefined ? node.questionTime : 0)+'" onchange="App.updateNode(\'questionTime\', this.value)"></label>';
+        html += '<label style="margin:0">Font size: <input type="number" step="2" min="10" max="200" style="width:70px" value="'+(node.questionFontSize !== undefined ? node.questionFontSize : 50)+'" onchange="App.updateNode(\'questionFontSize\', this.value)"></label>';
+        html += '<label style="margin:0">Weight: <select onchange="App.updateNode(\'questionFontWeight\', this.value)" style="width:auto"><option value="normal"'+((node.questionFontWeight||'700')==='normal'?' selected':'')+'>Normal</option><option value="700"'+((node.questionFontWeight||'700')==='700'?' selected':'')+'>Bold</option></select></label>';
+        html += '<label style="margin:0">Align: <select onchange="App.updateNode(\'questionAlign\', this.value)" style="width:auto"><option value="center"'+((node.questionAlign||'center')==='center'?' selected':'')+'>Center</option><option value="left"'+((node.questionAlign||'center')==='left'?' selected':'')+'>Left</option><option value="right"'+((node.questionAlign||'center')==='right'?' selected':'')+'>Right</option></select></label>';
+        html += '</div>';
+
+        html += this._posSliderRow(
+          (node.questionX !== undefined ? node.questionX : 50), (node.questionY !== undefined ? node.questionY : 50), (node.questionScale !== undefined ? node.questionScale : 1),
+          'App.updateNode(\'questionX\', this.value)',
+          'App.updateNode(\'questionY\', this.value)',
+          'App.updateNode(\'questionScale\', this.value)');
+
+        var isMulti = node.questionMode === 'multi';
+        html += '<label style="margin-top:12px">Svartype</label>';
+        html += '<select onchange="App.updateNode(\'questionMode\', this.value)">' +
+                '<option value="single"' + (!isMulti ? ' selected' : '') + '>Ét svar — svaret bestemmer næste scene</option>' +
+                '<option value="multi"' + (isMulti ? ' selected' : '') + '>Flere rigtige — vælg alle rigtige, se facit, fortsæt</option></select>';
+        if (isMulti) {
+          html += '<div style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4">Eleven markerer svar med blikket og trykker Bekræft. Bagefter lyser de rigtige grønt, de forkerte rødt, og elevens egne valg får ✓/✗. Derefter Fortsæt til <b>Default Next Node</b> nedenfor' + (node.replayEnabled ? ' — eller Se igen.' : '.') + ' Sæt flueben ved hvert rigtigt svar.</div>';
+          // Slået fra som standard: med 2 rigtige ud af 8 ville "Vælg 2 svar"
+          // afsløre svaret. Slået til tælles de svar, der er markeret rigtige.
+          var nRight = node.choices.filter(function(c){ return c.correct === true; }).length;
+          html += '<label style="margin-top:6px;display:flex;align-items:center;gap:6px;font-weight:normal" title="Slået fra: eleven får ikke at vide, hvor mange svar der er rigtige, og kan bekræfte med et vilkårligt antal valgt. Slået til: knappen siger Vælg ' + nRight + ' svar, og eleven kan først bekræfte, når præcis så mange er valgt."><input type="checkbox" style="width:auto"' + (node.multiShowCount ? ' checked' : '') + ' onchange="App.updateNode(\'multiShowCount\', this.checked)"> Fortæl eleven hvor mange der er rigtige (nu ' + nRight + ')</label>';
+        }
+        html += '<label style="margin-top:12px">Answer Choices</label>';
+        html += '<div class="overlay-list">';
+        
+        for(var k = 0; k < node.choices.length; k++) {
+          var c = node.choices[k];
+          var cBg = c.bgColor || '#0969da', cTxt = c.textColor || '#ffffff', cScale = (c.scale !== undefined ? c.scale : 1);
+          html += '<div class="overlay-item">';
+          html += '<div class="overlay-controls" style="flex-wrap:nowrap;">';
+          html += '<input type="checkbox" title="Correct answer"' + (c.correct ? ' checked' : '') + ' onchange="App.updateChoice(' + k + ', \'correct\', this.checked)" style="width:auto;">';
+          html += '<input type="text" value="' + esc(c.label) + '" placeholder="Answer..." onchange="App.updateChoice(' + k + ', \'label\', this.value)" style="flex:1;">';
+          // Ved flervalg navigerer svarene ikke (scenen går til Default Next),
+          // så mål pr. svar skjules.
+          if (!isMulti) {
+          html += '<select title="Navigate to" onchange="App.updateChoice(' + k + ', \'target\', this.value)" style="width:100px;">';
+          html += '<option value="">→ Default</option>';
+          for(var m = 0; m < this.project.nodes.length; m++) {
+            var n = this.project.nodes[m];
+            if(n.id !== node.id) {
+              html += '<option value="' + n.id + '"' + (c.target === n.id ? ' selected' : '') + '>' + esc(n.title) + '</option>';
+            }
+          }
+          html += '</select>';
+          }
+          html += '<button class="overlay-remove" style="margin-left:0;" onclick="App.removeChoice(' + k + ')">×</button>';
+          html += '</div>';
+          // Formatering af svar: baggrund, tekstfarve, størrelse.
+          html += '<div class="overlay-controls" style="margin-top:6px; flex-wrap:wrap;">';
+          html += '<label style="margin:0; display:flex; align-items:center; gap:4px;" title="Answer background">BG: <input type="color" list="colorPresets" value="'+esc(cBg)+'" onchange="App.updateChoice('+k+', \'bgColor\', this.value)"></label>';
+          html += '<label style="margin:0; display:flex; align-items:center; gap:4px;" title="Answer text colour">Txt: <input type="color" list="colorPresets" value="'+esc(cTxt)+'" onchange="App.updateChoice('+k+', \'textColor\', this.value)"></label>';
+          html += '<label style="margin:0; flex:1; min-width:120px;"><div style="display:flex;justify-content:space-between;font-weight:normal"><span>Size</span><span>'+cScale+'</span></div><input type="range" min="'+MIN_ANSWER_SIZE+'" max="2" step="0.1" value="'+cScale+'" oninput="this.previousElementSibling.children[1].textContent=this.value" onchange="App.updateChoice('+k+', \'scale\', this.value)"></label>';
+          html += '</div>';
+          html += '</div>';
+        }
+
+        html += '</div>';
+        var atMax = node.choices.length >= this.MAX_CHOICES;
+        html += '<button class="btn secondary mini" style="width:100%; margin-top:8px;"' + (atMax ? ' disabled' : '') +
+                ' onclick="App.addChoice()">+ Tilføj svarmulighed (' + node.choices.length + '/' + this.MAX_CHOICES + ')</button>';
+      }
+      
+      html += '<label style="margin-top:12px">Default Next Node (if no question / no selection)</label>';
+      html += '<select onchange="App.updateNode(\'defaultNext\', this.value)">';
+      html += '<option value="">Ingen (afslut simulation)</option>';
+      for(var q = 0; q < this.project.nodes.length; q++) {
+        var nav = this.project.nodes[q];
+        if(nav.id !== node.id) {
+          html += '<option value="' + nav.id + '"' + (node.defaultNext === nav.id ? ' selected' : '') + '>' + esc(nav.title) + '</option>';
+        }
+      }
+      html += '</select>';
+      html += '</div>';
+    }
+    
+    html += '<div class="field-group">';
+    html += '<h3>⚡ Actions</h3>';
+    html += '<div class="quick-actions">';
+    html += '<button class="action-btn" onclick="App.previewFromNode()">▶ Start herfra</button>';
+    html += '<button class="action-btn" onclick="App.duplicateNode()">📋 Duplicate</button>';
+    html += '<button class="action-btn" onclick="App.deleteNode()" style="color:var(--red)">🗑 Delete</button>';
+    if(this.project.startNode !== node.id) {
+      html += '<button class="action-btn" onclick="App.setStart()">🚀 Set Start</button>';
+    }
+    html += '</div>';
+    html += '</div>';
+    
+    inspector.innerHTML = html;
+    inspector.classList.add('active');
+  },
+  
+  // X/Y-sliderne dækker hele kuglen og skal derfor sige, hvilken vej der er
+  // hvad ("50" = lige frem, "0" = bag dig). Én hjælper, så tekst, billeder og
+  // spørgsmål altid er ens.
+  _posSliderRow: function(x, y, scale, onX, onY, onScale, opts) {
+    opts = opts || {};
+    var maxScale = opts.maxScale || 3;
+    var h = '<div class="slider-row">';
+    h += '<label title="0 og 100 = bag dig · 25 = venstre · 50 = lige frem · 75 = højre"><div style="display:flex;justify-content:space-between"><span>Vandret</span><span>' + App._yawHint(x) + '</span></div>'
+       + '<input type="range" min="0" max="100" value="' + x + '" oninput="this.previousElementSibling.children[1].textContent=App._yawHint(this.value)" onchange="' + onX + '"></label>';
+    h += '<label title="0 = lige op · 50 = i øjenhøjde · 100 = lige ned"><div style="display:flex;justify-content:space-between"><span>Lodret</span><span>' + App._pitchHint(y) + '</span></div>'
+       + '<input type="range" min="0" max="100" value="' + y + '" oninput="this.previousElementSibling.children[1].textContent=App._pitchHint(this.value)" onchange="' + onY + '"></label>';
+    if (onScale) {
+      h += '<label><div style="display:flex;justify-content:space-between"><span>Størrelse</span><span>' + scale + '</span></div>'
+         + '<input type="range" min="' + MIN_SIZE + '" max="' + maxScale + '" step="0.1" value="' + scale + '" oninput="this.previousElementSibling.children[1].textContent=this.value" onchange="' + onScale + '"></label>';
+    }
+    h += '</div>';
+    return h;
+  },
+
+  // Korte etiketter for en sliderposition, fx "50 · frem", "0 · bag dig".
+  // Indtastet vinkel → tilsvarende i -180..180 (tom/ugyldig → 0).
+  _wrapYaw: function(v) {
+    var n = parseFloat(v); if (!isFinite(n)) return 0;
+    n = Math.round(n);
+    return ((n + 180) % 360 + 360) % 360 - 180;
+  },
+
+  _yawHint: function(v) {
+    var n = parseFloat(v); if (!isFinite(n)) n = 50;
+    var deg = Math.round((n - 50) / 100 * 360);
+    var word = Math.abs(deg) >= 150 ? 'bag dig' : (deg <= -30 ? 'venstre' : (deg >= 30 ? 'højre' : 'frem'));
+    return n + ' · ' + word;
+  },
+  _pitchHint: function(v) {
+    var n = parseFloat(v); if (!isFinite(n)) n = 50;
+    var deg = Math.round((50 - n) / 100 * 180);
+    var word = deg >= 60 ? 'lige op' : (deg >= 15 ? 'op' : (deg <= -60 ? 'lige ned' : (deg <= -15 ? 'ned' : 'øjenhøjde')));
+    return n + ' · ' + word;
+  },
+
+  updateNode: function(prop, value) {
+    if(!this.selectedNode) return;
+
+    if(['duration', 'questionTime', 'questionX', 'questionY', 'questionScale', 'questionFontSize'].includes(prop)) {
+        value = parseFloat(value) || 0;
+    } else if(prop === 'videoYaw') {
+        value = num(value, 0, -180, 180);
+    } else if(prop === 'replayTime') {
+        value = num(value, 0, 0, 3600);
+    } else if(prop === 'replayEnabled') {
+        value = value === true;
+    } else if(prop === 'questionMode') {
+        value = value === 'multi' ? 'multi' : 'single';
+    } else if(prop === 'multiShowCount') {
+        value = value === true;
+    } else if(prop === 'sceneColor') {
+        value = (value === 'green' || value === 'red') ? value : '';
+    } else if(prop === 'gazeDwellSec') {
+        // Tom betyder standard; gem '' i stedet for 0.
+        value = (value === '' || value == null) ? '' : (parseFloat(value) || '');
+    }
+
+    this.selectedNode[prop] = value;
+    
+    if(prop === 'question') {
+      if(value && (!this.selectedNode.choices || this.selectedNode.choices.length===0)) {
+        this.selectedNode.choices = [
+          { id: 'c' + Date.now() + '1', label: 'Option A', correct: true, target: null },
+          { id: 'c' + Date.now() + '2', label: 'Option B', correct: false, target: null }
+        ];
+      }
+      this.showInspector(this.selectedNode);
+    }
+    if(prop === 'replayEnabled' || prop === 'questionMode') this.showInspector(this.selectedNode);
+    
+    this.createNodeElement(this.selectedNode);
+    this.updateConnections();
+    this.saveState();
+  },
+
+  addOverlay: function(type) {
+    if(!this.selectedNode) return;
+    if(type === 'image') {
+        if(!this.selectedNode.imageOverlays) this.selectedNode.imageOverlays = [];
+        this.selectedNode.imageOverlays.push({ imageId: '', time: 0, duration: 5, x: 50, y: 50, scale: 1.0 });
+    } else {
+        if(!this.selectedNode.textOverlays) this.selectedNode.textOverlays = [];
+        this.selectedNode.textOverlays.push({ time: 0, duration: 3, text: '', color: '#ffffff', textColor: '#000000', x: 50, y: 50, scale: 1.0 });
+    }
+    this.showInspector(this.selectedNode);
+    this.createNodeElement(this.selectedNode);
+    this.saveState();
+  },
+
+  updateOverlay: function(type, idx, prop, value) {
+    if(!this.selectedNode) return;
+    var list = type === 'image' ? this.selectedNode.imageOverlays : this.selectedNode.textOverlays;
+    if(!list || !list[idx]) return;
+
+    if(['time', 'duration', 'x', 'y', 'scale', 'fontSize'].includes(prop)) {
+        value = parseFloat(value) || 0;
+    }
+    if(prop === 'color') value = safeColor(value, '#ffffff');
+    if(prop === 'textColor') value = safeColor(value, '#000000');
+    list[idx][prop] = value;
+
+    if(prop === 'color' || prop === 'textColor' || prop === 'imageId') {
+        this.showInspector(this.selectedNode); // opdater farver/valg
+    }
+    this.createNodeElement(this.selectedNode);
+    this.saveState();
+  },
+
+  removeOverlay: function(type, idx) {
+    if(!this.selectedNode) return;
+    var list = type === 'image' ? this.selectedNode.imageOverlays : this.selectedNode.textOverlays;
+    if(list) list.splice(idx, 1);
+    this.showInspector(this.selectedNode);
+    this.createNodeElement(this.selectedNode);
+    this.saveState();
+  },
+
+  updateChoice: function(idx, prop, value) {
+    if(!this.selectedNode || !this.selectedNode.choices[idx]) return;
+    if(prop === 'scale') value = num(value, 1, 0.3, 3);
+    if(prop === 'bgColor') value = safeColor(value, '#0969da');
+    if(prop === 'textColor') value = safeColor(value, '#ffffff');
+    this.selectedNode.choices[idx][prop] = value;
+    if(prop === 'correct' && this.selectedNode.questionMode === 'multi') this.showInspector(this.selectedNode);
+    this.updateConnections();
+    this.saveState();
+  },
+  
+  // Op til 20 svar. Player lægger dem i et jævnt gitter (20 = 5 x 4). Grænsen
+  // sættes her, så forfatteren opdager den med det samme.
+  MAX_CHOICES: 20,
+
+  addChoice: function() {
+    if(!this.selectedNode) return;
+    if(!this.selectedNode.choices) this.selectedNode.choices = [];
+    if(this.selectedNode.choices.length >= this.MAX_CHOICES) {
+      this.showStatus('Maks. ' + this.MAX_CHOICES + ' svarmuligheder pr. spørgsmål');
+      return;
+    }
+    this.selectedNode.choices.push({ id: 'c' + Date.now(), label: 'New Option', correct: false, target: null });
+    this.showInspector(this.selectedNode);
+    this.saveState();
+  },
+  
+  removeChoice: function(idx) {
+    if(!this.selectedNode || !this.selectedNode.choices) return;
+    this.selectedNode.choices.splice(idx, 1);
+    this.showInspector(this.selectedNode);
+    this.saveState();
+  },
+  
+  deleteNode: function() {
+    if(!this.selectedNode) return;
+    var id = this.selectedNode.id;
+    
+    this.project.nodes = this.project.nodes.filter(function(n) { return n.id !== id; });
+    this.project.nodes.forEach(function(n) {
+      if(n.defaultNext === id) n.defaultNext = null;
+      if(n.choices) {
+        n.choices.forEach(function(c) {
+          if(c.target === id) c.target = null;
+        });
+      }
+    });
+    
+    var el = document.getElementById(id);
+    if(el) el.remove();
+    
+    if(this.project.startNode === id) {
+      this.project.startNode = this.project.nodes[0] ? this.project.nodes[0].id : null;
+    }
+    
+    this.deselect();
+    this.updateConnections();
+    this.updateStats();
+    this.fitView();
+    this.saveState();
+  },
+
+  setStart: function() {
+    if(!this.selectedNode) return;
+    this.project.startNode = this.selectedNode.id;
+    var nodes = document.querySelectorAll('.node');
+    for(var i = 0; i < nodes.length; i++) {
+      nodes[i].classList.remove('start');
+    }
+    document.getElementById(this.selectedNode.id).classList.add('start');
+    this.showInspector(this.selectedNode);
+    this.saveState();
+  },
+  
+  duplicateNode: function() {
+    if(!this.selectedNode) return;
+    var copy = JSON.parse(JSON.stringify(this.selectedNode));
+    copy.id = 'node_' + Date.now() + Math.random().toString(36).substr(2,4);
+    copy.x += 60;
+    copy.y += 60;
+    copy.title += ' (Copy)';
+    if(copy.choices) {
+      copy.choices.forEach(function(c) {
+        c.id = 'c' + Date.now() + Math.random().toString(36).substr(2,4);
+      });
+    }
+    this.project.nodes.push(copy);
+    this.createNodeElement(copy);
+    this.updateConnections();
+    this.updateStats();
+    this.fitView();
+    this.saveState();
+  },
+  
+  // ---- LÆRRED, TRÆK OG VISNING ----
+  // skærm = verden * view.scale + view.(x,y), origin 0 0. #canvas'
+  // getBoundingClientRect() indeholder allerede panoreringen, så
+  // markør → verden er (client - rect) / scale.
+  startDrag: function(e, node) {
+    // preventDefault() på mousedown forhindrer blur på det felt i inspektøren,
+    // der har fokus, og ændringen ville gå tabt, når selectNode() genopbygger
+    // panelet. Gem den først.
+    var _active = document.activeElement;
+    if (_active && _active !== document.body && typeof _active.blur === 'function' && (_active.tagName === 'INPUT' || _active.tagName === 'TEXTAREA' || _active.tagName === 'SELECT')) {
+      _active.blur();
+    }
+    e.preventDefault();
+    this.dragging = node;
+    var rect = e.target.closest('.node').getBoundingClientRect();
+    // Skærm-px → verden-px, ellers hopper scenen ved anden zoom end 100 %.
+    this.dragOffset = {
+      x: (e.clientX - rect.left) / this.view.scale,
+      y: (e.clientY - rect.top) / this.view.scale
+    };
+    
+    var self = this;
+    var moveHandler = function(e) { self.onDrag(e); };
+    var upHandler = function() {
+      self.dragging = null;
+      document.removeEventListener('mousemove', moveHandler);
+      document.removeEventListener('mouseup', upHandler);
+      self.saveState();
+    };
+    
+    document.addEventListener('mousemove', moveHandler);
+    document.addEventListener('mouseup', upHandler);
+  },
+  
+  onDrag: function(e) {
+    if(!this.dragging) return;
+    var canvas = document.getElementById('canvas').getBoundingClientRect();
+    var s = this.view.scale;
+    // Ikke under 0, så en scene ikke kan havne uden for rækkevidde.
+    this.dragging.x = Math.max(0, (e.clientX - canvas.left) / s - this.dragOffset.x);
+    this.dragging.y = Math.max(0, (e.clientY - canvas.top) / s - this.dragOffset.y);
+    
+    var el = document.getElementById(this.dragging.id);
+    if(el) {
+        el.style.left = this.dragging.x + 'px';
+        el.style.top = this.dragging.y + 'px';
+    }
+    
+    this.updateConnections();
+  },
+
+  initPanZoom: function() {
+    var self = this;
+    var wrap = document.querySelector('.canvas-wrap');
+
+    // Panorering: venstre-/midtertræk på tomt lærred. Under 4 px er det et
+    // klik, der fravælger.
+    wrap.addEventListener('mousedown', function(e) {
+      if (e.button !== 0 && e.button !== 1) return;
+      if (e.target.closest('.node') || e.target.closest('.add-menu') || e.target.closest('.view-controls')) return;
+      // preventDefault() herunder forhindrer blur, så et felt i inspektøren
+      // (der gemmer ved onchange/blur) ville miste sin værdi, når deselect()
+      // genopbygger panelet. Gem den selv først.
+      var _active = document.activeElement;
+      if (_active && _active !== document.body && typeof _active.blur === 'function' && (_active.tagName === 'INPUT' || _active.tagName === 'TEXTAREA' || _active.tagName === 'SELECT')) {
+        _active.blur();
+      }
+      e.preventDefault();
+      var startX = e.clientX, startY = e.clientY;
+      var origX = self.view.x, origY = self.view.y;
+      var moved = false;
+      wrap.classList.add('panning');
+      var move = function(ev) {
+        var dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+        self.view.x = origX + dx;
+        self.view.y = origY + dy;
+        self.applyView();
+      };
+      var up = function() {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        wrap.classList.remove('panning');
+        if (!moved) self.deselect();
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+
+    // Zoom med hjulet omkring markøren.
+    wrap.addEventListener('wheel', function(e) {
+      e.preventDefault();
+      var rect = wrap.getBoundingClientRect();
+      self.zoomAt(e.deltaY < 0 ? 1.1 : 1/1.1, e.clientX - rect.left, e.clientY - rect.top);
+    }, { passive: false });
+  },
+
+  applyView: function() {
+    document.getElementById('canvas').style.transform =
+      'translate(' + this.view.x + 'px,' + this.view.y + 'px) scale(' + this.view.scale + ')';
+    var z = document.getElementById('zoomLabel');
+    if (z) z.textContent = Math.round(this.view.scale * 100) + '%';
+  },
+
+  zoomAt: function(factor, px, py) {
+    // Hold verdenspunktet under (px, py) fast under zoom.
+    var old = this.view.scale;
+    var next = Math.min(2.5, Math.max(0.2, old * factor));
+    this.view.x = px - (px - this.view.x) * (next / old);
+    this.view.y = py - (py - this.view.y) * (next / old);
+    this.view.scale = next;
+    this.applyView();
+  },
+
+  zoomBy: function(factor) {
+    var wrap = document.querySelector('.canvas-wrap');
+    this.zoomAt(factor, wrap.clientWidth / 2, wrap.clientHeight / 2);
+  },
+
+  fitView: function() {
+    var wrap = document.querySelector('.canvas-wrap');
+    var ns = this.project.nodes;
+    if (!ns.length) { this.resetView(); return; }
+    // Tilpas aldrig til en beholder på 0 px. Brug den nuværende visning og lad
+    // den udskudte fit / ResizeObserver prøve igen.
+    if (!wrap || wrap.clientWidth === 0 || wrap.clientHeight === 0) { this.applyView(); return; }
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    ns.forEach(function(n) {
+      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + 160); maxY = Math.max(maxY, n.y + 120);
+    });
+    var pad = 60;
+    var s = Math.min(
+      (wrap.clientWidth - pad * 2) / Math.max(1, maxX - minX),
+      (wrap.clientHeight - pad * 2) / Math.max(1, maxY - minY),
+      1.25
+    );
+    s = Math.max(0.2, Math.min(2.5, s));
+    this.view.scale = s;
+    this.view.x = (wrap.clientWidth - (maxX - minX) * s) / 2 - minX * s;
+    this.view.y = (wrap.clientHeight - (maxY - minY) * s) / 2 - minY * s;
+    this.applyView();
+  },
+
+  resetView: function() {
+    this.view = { x: 0, y: 0, scale: 1 };
+    this.applyView();
+  },
+  
+  updateConnections: function() {
+    var oldConns = document.querySelectorAll('.connection');
+    for(var i = 0; i < oldConns.length; i++) {
+      oldConns[i].remove();
+    }
+    
+    var self = this;
+    var connectionCount = 0;
+    
+    this.project.nodes.forEach(function(node) {
+      if(node.defaultNext) {
+        self.drawConnection(node.id, node.defaultNext, 'default');
+        connectionCount++;
+      }
+      if(node.choices && node.questionMode !== 'multi') {
+        node.choices.forEach(function(choice) {
+          if(choice.target) {
+            self.drawConnection(node.id, choice.target, choice.correct ? 'correct' : 'incorrect');
+            connectionCount++;
+          }
+        });
+      }
+    });
+    
+    document.getElementById('connectionCount').textContent = connectionCount;
+  },
+  
+  drawConnection: function(fromId, toId, type) {
+    // Endepunkter ud fra modelkoordinater. SVG'en ligger i #canvas, så
+    // pan/zoom-transformen gælder automatisk. Scenekort er 160×120, så
+    // centrum er x+80 / y+60.
+    var from = this.project.nodes.find(function(n) { return n.id === fromId; });
+    var to = this.project.nodes.find(function(n) { return n.id === toId; });
+    if(!from || !to) return;
+    
+    var x1 = from.x + 80, y1 = from.y + 60;
+    var x2 = to.x + 80,   y2 = to.y + 60;
+    
+    var container = document.createElement('div');
+    container.className = 'connection ' + type;
+    
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    
+    var dx = x2 - x1;
+    var c1x = x1 + dx * 0.3;
+    var c1y = y1;
+    var c2x = x2 - dx * 0.3;
+    var c2y = y2;
+    
+    var d = 'M ' + x1 + ' ' + y1 + ' C ' + c1x + ' ' + c1y + ', ' + c2x + ' ' + c2y + ', ' + x2 + ' ' + y2;
+    path.setAttribute('d', d);
+    
+    svg.appendChild(path);
+    container.appendChild(svg);
+    document.getElementById('canvas').appendChild(container);
+  },
+  
+  // ---- MEDIER ----
+  addVideos: function(e) {
+    var self = this;
+    var files = Array.from(e.target.files);
+    if(files.length === 0) return;
+    
+    files.forEach(function(file) {
+      var url = URL.createObjectURL(file);
+      var asset = {
+        id: 'v' + Date.now() + Math.random().toString(36).substr(2,4),
+        name: file.name,
+        fileObj: file, // behold den rigtige File i hukommelsen
+        url: url,
+        thumb: null
+      };
+      // Tilføj mediet med det samme. HEVC/H.265 (typisk fra 360-kameraer) giver
+      // hverken loadeddata eller error i Chrome, så thumbnailen kan udeblive.
+      // Den kommer bagefter, hvis den kommer.
+      self.project.assets.videos.push(asset);
+      
+      self.generateThumb(url).then(function(thumb) {
+        if (!thumb) return; // ingen frame, mediet virker stadig
+        // Find mediet via id: fortryd kloner objekterne, så referencen kan være forældet.
+        var a = self.project.assets.videos.find(function(v) { return v.id === asset.id; });
+        if (!a) return; // slettet/fortrudt imens
+        a.thumb = thumb;
+        self.updateAssetLists();
+        self.project.nodes.forEach(function(n) { if (n.video === a.id) self.createNodeElement(n); });
+      });
+    });
+    
+    this._assetsNeedRelink = false;
+    this.updateAssetLists();
+    this.saveState();
+    this.showStatus('Added ' + files.length + ' video(s)');
+    e.target.value = '';
+  },
+  
+  addImages: function(e) {
+    var files = Array.from(e.target.files);
+    var self = this;
+    if(files.length === 0) return;
+
+    files.forEach(function(file) {
+      var url = URL.createObjectURL(file);
+      self.project.assets.images.push({
+        id: 'i' + Date.now() + Math.random().toString(36).substr(2,4),
+        name: file.name,
+        fileObj: file,
+        url: url
+      });
+      self.updateAssetLists();
+      self.saveState();
+    });
+    
+    this.showStatus('Added ' + files.length + ' image(s)');
+    e.target.value = '';
+  },
+  
+  generateThumb: function(videoUrl) {
+    // Promiset afgøres altid, og der tages en rigtig frame (ikke sort frame 0).
+    //  - Timeout 8 s: når 3-4 store 360-klip dekodes på én gang, kan metadata
+    //    alene tage over 3 s. Mediet er allerede tilføjet, så en langsom
+    //    thumbnail blokerer ikke noget.
+    //  - <video> hænges usynligt på DOM'en under optagelsen; i nogle Chromium-
+    //    versioner kommer 'seeked' ellers aldrig for et løsrevet element.
+    //  - Fallback på 'loadeddata': kommer 'seeked' ikke inden 1,5 s, tegnes den
+    //    frame der er. En lidt skæv thumbnail er bedre end ingen.
+    return new Promise(function(resolve) {
+      var video = document.createElement('video');
+      video.muted = true;
+      video.preload = 'auto';
+      video.playsInline = true;
+      video.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:2px;height:2px;opacity:0;pointer-events:none;';
+      document.body.appendChild(video);
+
+      var done = false;
+      var fallbackTimer = null;
+      var finish = function(result) {
+        if (done) return;
+        done = true;
+        clearTimeout(killswitch);
+        clearTimeout(fallbackTimer);
+        // Frigiv dekoderen (som ved preview).
+        try { video.removeAttribute('src'); video.load(); } catch(e) {}
+        try { video.remove(); } catch(e) {}
+        resolve(result);
+      };
+      var grab = function() {
+        try {
+          var canvas = document.createElement('canvas');
+          canvas.width = 320;
+          canvas.height = 180;
+          canvas.getContext('2d').drawImage(video, 0, 0, 320, 180);
+          finish(canvas.toDataURL('image/jpeg', 0.5));
+        } catch(e) { finish(null); }
+      };
+      var killswitch = setTimeout(function() { finish(null); }, 8000);
+
+      video.src = videoUrl;
+
+      video.addEventListener('loadedmetadata', function() {
+        try {
+          video.currentTime = Math.min(1, (video.duration || 2) / 2);
+        } catch(e) { finish(null); }
+      });
+      video.addEventListener('loadeddata', function() {
+        // Første frame kan dekodes; hænger seek'en, så vent ikke resten af de 8 s.
+        if (!fallbackTimer) fallbackTimer = setTimeout(grab, 1500);
+      });
+      video.addEventListener('seeked', grab);
+      video.addEventListener('error', function() { finish(null); });
+    });
+  },
+  
+  updateAssetLists: function() {
+    document.getElementById('videoCount').textContent = this.project.assets.videos.length;
+    document.getElementById('imageCount').textContent = this.project.assets.images.length;
+
+    var relink = this._assetsNeedRelink ? ' <span style="color:var(--red)">(re-load .zip)</span>' : '';
+
+    var vList = document.getElementById('videoList');
+    if(this.project.assets.videos.length > 0) {
+        vList.innerHTML = this.project.assets.videos.map(v => `<div class="asset-item-row" title="${esc(v.name)}">🎬 ${esc(v.name)}${(!v.fileObj && this._assetsNeedRelink)?relink:''}</div>`).join('');
+    } else {
+        vList.innerHTML = '<i>No videos uploaded yet</i>';
+    }
+
+    var iList = document.getElementById('imageList');
+    if(this.project.assets.images.length > 0) {
+        iList.innerHTML = this.project.assets.images.map(i => `<div class="asset-item-row" title="${esc(i.name)}">🖼 ${esc(i.name)}${(!i.fileObj && this._assetsNeedRelink)?relink:''}</div>`).join('');
+    } else {
+        iList.innerHTML = '<i>No images uploaded yet</i>';
+    }
+  },
+  
+  updateStats: function() {
+    document.getElementById('nodeCount').textContent = this.project.nodes.length;
+    this.renderProjectSettings();
+  },
+
+  // Indstillinger for hele simulationen (gemmes i project.json, læses af Player).
+  renderProjectSettings: function() {
+    var host = document.getElementById('projectSettings');
+    if (!host) return;
+    var p = this.project;
+    var idle = (p.idleTimeoutSec !== undefined && p.idleTimeoutSec !== null) ? p.idleTimeoutSec : 0;
+    host.innerHTML =
+      '<h3>⚙️ Simulation-indstillinger</h3>' +
+      '<label style="display:flex;align-items:center;gap:6px;font-weight:normal"><input type="checkbox" style="width:auto"' + (p.hideExit ? '' : ' checked') +
+        ' onchange="App.updateProjectSetting(\'hideExit\', !this.checked)"> Vis "✕ Afslut"-knap i VR</label>' +
+      '<div style="font-size:11px;color:var(--muted);margin:2px 0 10px 22px;line-height:1.4">Uden Afslut kan eleven kun stoppe ved at gennemføre, når læreren afslutter holdet i Dashboardet — eller ved at tage headsettet af (se nedenfor).</div>' +
+      '<label style="font-weight:normal" title="Et headset der ikke bevæger sig i så mange sekunder midt i simulationen (lagt fra sig / taget af) afsluttes, og kørslen tælles ikke med i hold-statistikken. 0 = slået fra.">Udeluk inaktive headsets efter <input type="number" min="0" max="3600" step="5" style="width:70px" value="' + idle + '" onchange="App.updateProjectSetting(\'idleTimeoutSec\', this.value)"> sek. uden bevægelse</label>' +
+      '<div style="font-size:11px;color:var(--muted);margin-top:2px;line-height:1.4">0 = slået fra. Mindst 15 sek. Gælder kun i headsettet, ikke i Preview.</div>';
+  },
+
+  updateProjectSetting: function(prop, value) {
+    if (prop === 'hideExit') this.project.hideExit = value === true;
+    else if (prop === 'idleTimeoutSec') {
+      var n = Math.round(num(value, 0, 0, 3600));
+      this.project.idleTimeoutSec = (n > 0 && n < 15) ? 15 : n;
+    }
+    this.renderProjectSettings();
+    this.saveState();
+  },
+  
+  toggleAddMenu: function() {
+    document.getElementById('addOptions').classList.toggle('show');
+  },
+  
+  showStatus: function(msg) {
+    var status = document.getElementById('status');
+    status.textContent = msg;
+    status.classList.add('show');
+    setTimeout(function() { status.classList.remove('show'); }, 3500);
+  },
+  
+  showLoader: function(show, text) {
+    var loader = document.getElementById('globalLoader');
+    loader.style.display = show ? 'block' : 'none';
+    if(text) document.getElementById('loaderText').textContent = text;
+  },
+  
+  // ---- PREVIEW ----
+  preview: function() {
+    var startNode = this.project.nodes.find(n => n.id === this.project.startNode);
+    if(!startNode) {
+      this.showStatus('Please set a start node first');
+      return;
+    }
+
+    // Ryd den gamle previews overlay-timer, FØR previewState udskiftes. Ellers
+    // kan cleanupPreviewTimers() ikke nå den, og flere intervaller kører
+    // samtidig: uret og tidsstyrede overlays løber for hurtigt, og svar-
+    // knapperne blinker ved klik.
+    if (this.previewState) this.cleanupPreviewTimers();
+    this._resetPreviewFrame();
+
+    this.previewState = {
+      currentNode: startNode,
+      history: [],
+      videoTime: 0,
+      overlayTimer: null,
+      videoFailed: false
+    };
+
+    document.getElementById('previewModal').classList.add('show');
+    document.getElementById('previewTitle').textContent = this.project.title;
+    this.renderPreviewNode(startNode);
+  },
+
+  // Preview fra en vilkårlig scene, så man ikke skal klikke sig igennem fra
+  // start i et stort forløb. Samme maskineri som preview(); historikken er tom,
+  // så Back ikke har noget at gå tilbage til.
+  previewFromNode: function(node) {
+    if (!node) node = this.selectedNode;
+    if (!node) {
+      this.showStatus('Select a node first');
+      return;
+    }
+    if (this.previewState) this.cleanupPreviewTimers();
+    this._resetPreviewFrame();
+    this.previewState = {
+      currentNode: node,
+      history: [],
+      videoTime: 0,
+      overlayTimer: null,
+      videoFailed: false
+    };
+    document.getElementById('previewModal').classList.add('show');
+    document.getElementById('previewTitle').textContent = this.project.title + ' — fra "' + esc(node.title || 'Untitled') + '"';
+    this.renderPreviewNode(node);
+  },
+
+  // Et klik på "Preview" skal altid give en frisk Player. Var forrige kørsel
+  // færdig (onSessionEnd), står iframen på Players egen startskærm, og den
+  // må aldrig vises inde i Builder. Derfor rives iframen ned først.
+  _resetPreviewFrame: function() {
+    var iframe = document.getElementById('previewPlayerFrame');
+    if (iframe) iframe.remove();
+    this._previewLoaded = false;
+    this._stopPreviewLiveSync();
+  },
+
+  // Preview indlejrer Players egen side i en iframe (flatPreview-tilstand) og
+  // styrer den via postMessage. Så er preview og headset altid ens.
+  PLAYER_PREVIEW_URL: '../LaerbarXR-Player/index.html',
+
+  renderPreviewNode: function(node) {
+    if (!Array.isArray(node.choices)) node.choices = [];
+    this.previewState.currentNode = node;
+
+    var body = document.getElementById('previewBody');
+    var self = this;
+
+    var iframe = document.getElementById('previewPlayerFrame');
+    if (!iframe) {
+      body.innerHTML = '<iframe id="previewPlayerFrame" title="Live preview" style="width:100%; height:100%; min-height:480px; border:0; border-radius:8px; background:#000; display:block;" allow="autoplay"></iframe>';
+      iframe = document.getElementById('previewPlayerFrame');
+      this._previewLoaded = false;
+      iframe.addEventListener('load', function() { self._sendPreviewLoad(node); });
+      // Mappen ved siden af. Virker også på GitHub Pages, hvor Builder og Player
+      // ligger under samme mohaulik.github.io.
+      iframe.src = this.PLAYER_PREVIEW_URL;
+    } else if (this._previewLoaded) {
+      iframe.contentWindow.postMessage({ type: 'lxrPreviewGoto', nodeId: node.id }, '*');
+    }
+    // Ellers: iframen findes, men har ikke fyret 'load' endnu; dens load-handler
+    // kalder _sendPreviewLoad() med den scene, der er aktuel til den tid.
+
+    this._refreshPreviewNav(node);
+  },
+
+  // Giver den indlejrede Player alt den skal bruge: hele simulationen (så klik
+  // på svar navigerer som i produktion) og medierne. Sendes én gang pr. preview;
+  // derefter bruges lxrPreviewGoto og lxrPreviewUpdateNode.
+  _sendPreviewLoad: function(node) {
+    var iframe = document.getElementById('previewPlayerFrame');
+    if (!iframe || !iframe.contentWindow) return;
+    var assets = [];
+    // Send de eksisterende blob:-URL'er (v.url / i.url), ikke selve Blob/File.
+    // En blob:-URL kan bruges af alle dokumenter med samme origin, og Player
+    // indlæses fra samme origin. En Blob sendt via postMessage gav i Chromium
+    // en <video>, der aldrig forlod readyState 0.
+    (this.project.assets.videos || []).forEach(function(v) { if (v.url) assets.push({ id: v.id, url: v.url }); });
+    (this.project.assets.images || []).forEach(function(i) { if (i.url) assets.push({ id: i.id, url: i.url }); });
+    var scenario = {
+      title: this.project.title,
+      startNode: node.id, // preview starter ved den scene, forfatteren kigger på
+      gazeDwellSec: this.project.gazeDwellSec,
+      hideExit: this.project.hideExit === true,
+      // Uden denne bruger Player det gamle koordinatsystem, og preview ville
+      // placere alt anderledes end eksporten.
+      coordSpace: this.project.coordSpace || COORD_SPHERE,
+      nodes: this.project.nodes
+    };
+    iframe.contentWindow.postMessage({ type: 'lxrPreviewLoad', scenario: scenario, assets: assets }, '*');
+    this._previewLoaded = true;
+    this._startPreviewLiveSync();
+  },
+
+  // Ændringer i den viste scene skal ses live uden Restart. Vi poller
+  // projektdata for scenen i stedet for at koble os på hver enkelt
+  // redigeringsfunktion, så nye felter automatisk kommer med.
+  _startPreviewLiveSync: function() {
+    var self = this;
+    this._stopPreviewLiveSync();
+    this._previewLastNodeJSON = JSON.stringify(this.previewState.currentNode);
+    this._previewLiveSyncTimer = setInterval(function() {
+      if (!self.previewState || !self.previewState.currentNode) return;
+      var node = self.project.nodes.find(function(n) { return n.id === self.previewState.currentNode.id; });
+      if (!node) return;
+      var json = JSON.stringify(node);
+      if (json !== self._previewLastNodeJSON) {
+        self._previewLastNodeJSON = json;
+        var iframe = document.getElementById('previewPlayerFrame');
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: 'lxrPreviewUpdateNode', node: node }, '*');
+        }
+      }
+    }, 400);
+  },
+
+  _stopPreviewLiveSync: function() {
+    if (this._previewLiveSyncTimer) { clearInterval(this._previewLiveSyncTimer); this._previewLiveSyncTimer = null; }
+    this._previewLastNodeJSON = null;
+  },
+
+  // Kaldes både når vi selv har vist en scene, og når Player melder
+  // (lxrPreviewNode), at navigation i iframen har skiftet scene, så
+  // Back/Restart/Continue altid passer.
+  _refreshPreviewNav: function(node) {
+    var nav = document.getElementById('previewNav');
+    if (!nav) return;
+    var navHtml = '';
+    if (this.previewState.history.length > 0) {
+      navHtml += '<button class="btn secondary" onclick="App.previewBack()">← Back</button>';
+    }
+    if (node.type === 'end') {
+      navHtml += '<button class="btn" onclick="App.restartPreview()">Restart</button>';
+    } else if (!node.choices || node.choices.length === 0) {
+      if (node.defaultNext) {
+        navHtml += '<button class="btn" onclick="App.previewNext()">Continue →</button>';
+      }
+    }
+    nav.innerHTML = navHtml;
+  },
+
+  // Beskeder FRA den indlejrede Player.
+  _onPreviewFrameMessage: function(msg) {
+    if (!this.previewState) return;
+    if (msg.type === 'lxrPreviewNode') {
+      var node = this.project.nodes.find(function(n) { return n.id === msg.nodeId; });
+      if (!node) return;
+      var cur = this.previewState.currentNode;
+      if (!cur || cur.id !== node.id) {
+        if (cur) this.previewState.history.push(cur.id);
+        this.previewState.currentNode = node;
+        this._refreshPreviewNav(node);
+        this._startPreviewLiveSync(); // sammenlign live-ændringer med scenen der nu vises
+      }
+    } else if (msg.type === 'lxrPreviewLift') {
+      // Player har løftet spørgsmål/svar over den angivne højde for at gå fri af
+      // Afslut. Gem den reelle højde som scenens Lodret, så blokken beholder
+      // højden, når den flyttes til siden. Hæver kun; Lodret kan stadig sænke den.
+      var lifted = this.project.nodes.find(function(n) { return n.id === msg.nodeId; });
+      var pitch = parseFloat(msg.pitchDeg);
+      if (!lifted || !isFinite(pitch) || (this.project.coordSpace || COORD_SPHERE) !== COORD_SPHERE) return;
+      // Omvendt af Players kugleformel, pitch = (50 - y) / 100 * 180.
+      // floor() runder mod "højere", så Player ikke skal løfte igen.
+      var liftedY = Math.max(0, Math.floor(50 - pitch / 1.8));
+      if (liftedY >= num(lifted.questionY, 50, 0, 100)) return;
+      lifted.questionY = liftedY;
+      // Preview viser allerede denne højde; opdater sammenligningen, så scenen
+      // ikke genindlæses for ingenting.
+      var cur = this.previewState.currentNode;
+      if (cur && cur.id === lifted.id) this._previewLastNodeJSON = JSON.stringify(lifted);
+      if (this.selectedNode && this.selectedNode.id === lifted.id) this.showInspector(lifted);
+      this.saveState();
+    } else if (msg.type === 'lxrPreviewEnded') {
+      // Player har afsluttet en kørsel og står på sin egen startskærm, som ikke
+      // må vises i Builder. Luk panelet.
+      this.closePreview();
+    }
+  },
+  
+  handlePreviewChoice: function(node, idx, choiceEl) {
+    var choice = node.choices[idx];
+    choiceEl.classList.add(choice.correct ? 'correct' : 'incorrect');
+    
+    var self = this;
+    setTimeout(function() {
+      self.previewState.history.push(node.id);
+      var nextId = choice.target || node.defaultNext;
+      if(nextId) {
+        var nextNode = self.project.nodes.find(n => n.id === nextId);
+        if(nextNode) {
+          self.renderPreviewNode(nextNode);
+          return;
+        }
+      }
+      self.closePreview();
+    }, 800);
+  },
+  
+  previewNext: function() {
+    var cn = this.previewState.currentNode;
+    if(!cn || !cn.defaultNext) return;
+    this.previewState.history.push(cn.id);
+    var nextNode = this.project.nodes.find(n => n.id === cn.defaultNext);
+    if(nextNode) {
+      this.previewState.currentNode = nextNode;
+      this.renderPreviewNode(nextNode);
+    }
+  },
+  
+  previewBack: function() {
+    if(this.previewState.history.length === 0) return;
+    var prevId = this.previewState.history.pop();
+    var prevNode = this.project.nodes.find(n => n.id === prevId);
+    if(prevNode) {
+      this.previewState.currentNode = prevNode;
+      this.renderPreviewNode(prevNode);
+    }
+  },
+  
+  restartPreview: function() {
+    var startNode = this.project.nodes.find(n => n.id === this.project.startNode);
+    if(startNode) {
+      this.previewState.history = [];
+      this.renderPreviewNode(startNode);
+    }
+  },
+  
+  cleanupPreviewTimers: function() {
+    if(this.previewState.overlayTimer) {
+      clearInterval(this.previewState.overlayTimer);
+      this.previewState.overlayTimer = null;
+    }
+    var videoEl = document.getElementById('previewVideo');
+    if (videoEl) {
+        // Frigiv dekoderen helt, ellers rammer browseren loftet for samtidige
+        // dekodninger, og senere videoer afspilles ikke.
+        try { videoEl.pause(); videoEl.removeAttribute('src'); videoEl.load(); } catch(e){}
+    }
+    this.previewState.videoFailed = false;
+    this._stopPreviewLiveSync();
+  },
+
+  closePreview: function() {
+    document.getElementById('previewModal').classList.remove('show');
+    this.cleanupPreviewTimers();
+    // Riv den indlejrede Player ned (frigiver dekoder og WebGL), så næste
+    // Preview altid starter forfra.
+    var iframe = document.getElementById('previewPlayerFrame');
+    if (iframe) iframe.remove();
+    this._previewLoaded = false;
+  },
+
+  // Filnavn-dialog i siden. window.prompt() er blokeret i sandboxede iframes
+  // og nogle webviews.
+  askFilename: function(message, defaultName) {
+    return new Promise(function(resolve){
+      var back = document.createElement('div');
+      back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:3000';
+      var box = document.createElement('div');
+      box.style.cssText = 'background:var(--surface);border-radius:12px;padding:20px;width:90%;max-width:380px;box-shadow:var(--shadow-lg)';
+      box.innerHTML = '<h3 style="font-size:15px;font-weight:600;margin-bottom:10px">' + esc(message) + '</h3>';
+      var input = document.createElement('input');
+      input.type = 'text'; input.value = defaultName;
+      input.style.cssText = 'width:100%;margin-bottom:14px';
+      box.appendChild(input);
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';
+      var cancel = document.createElement('button'); cancel.className = 'btn secondary mini'; cancel.textContent = 'Cancel';
+      var ok = document.createElement('button'); ok.className = 'btn mini'; ok.textContent = 'Save';
+      row.appendChild(cancel); row.appendChild(ok); box.appendChild(row);
+      back.appendChild(box); document.body.appendChild(back);
+      input.focus(); input.select();
+      var done = function(val){ if (back.parentNode) document.body.removeChild(back); resolve(val); };
+      cancel.onclick = function(){ done(null); };
+      ok.onclick = function(){ done(input.value); };
+      input.addEventListener('keydown', function(e){ if(e.key==='Enter') done(input.value); if(e.key==='Escape') done(null); });
+      back.addEventListener('mousedown', function(e){ if(e.target === back) done(null); });
+    });
+  },
+
+  // ---- GEM OG EKSPORT ----
+  save: async function(isExport) {
+    isExport = !!isExport;
+    var ext = isExport ? '.zip' : '.lxr';
+    var defaultName = this.project.title.replace(/[^a-z0-9]/gi, '_') + ext;
+    var promptMsg = isExport ? 'Enter export filename:' : 'Enter filename for your project:';
+    var fileName = await this.askFilename(promptMsg, defaultName);
+    
+    if(!fileName) return;
+    if(!fileName.endsWith(ext)) fileName += ext;
+    
+    this.showLoader(true, 'Packaging… reading media safely');
+
+    // Intet, der kan kaste en fejl, må stå før try-blokken. Fejlede JSZip at
+    // indlæse, hang eksporten ellers på "Packaging…" uden fejlbesked.
+    try {
+      var zip = new JSZip();
+
+      // project.json uden binære data: ingen File og ingen base64-thumbnails
+      // (de skrives som .thumb.jpg ved siden af).
+      var projectData = JSON.parse(JSON.stringify(this.project, function(k, v){
+        return (k === 'fileObj' || k === 'thumb') ? undefined : v;
+      }));
+      // Klonen har allerede feltet, men mangler det, falder Player tilbage til
+      // det gamle koordinatsystem. Sæt det eksplicit.
+      projectData.coordSpace = this.project.coordSpace || COORD_SPHERE;
+      projectData.assets.videos.forEach(function(v){ delete v.data; delete v.url; v.file = 'videos/' + v.id + '_' + v.name.replace(/[\\/]/g,'_'); });
+      projectData.assets.images.forEach(function(i){ delete i.data; delete i.url; i.file = 'images/' + i.id + '_' + i.name.replace(/[\\/]/g,'_'); });
+
+      var videosFolder = zip.folder('videos');
+      var imagesFolder = zip.folder('images');
+      var missing = [];
+
+      // Find en Blob, der faktisk kan læses, ellers null. slice(0,1)-testen
+      // fanger et dødt File-handle før generateAsync, så ét defekt klip springes
+      // over med navn i stedet for at stoppe hele eksporten.
+      var resolveBlob = async function(a){
+        var blob = null;
+        if (a.fileObj instanceof Blob) {
+          blob = a.fileObj;
+        } else if (typeof a.url === 'string' && /^(blob:|https?:)/.test(a.url)) {
+          try { blob = await (await fetch(a.url)).blob(); } catch(e){ blob = null; }
+        } else if (typeof a.data === 'string' && a.data.indexOf('base64,') > -1) {
+          try {
+            var bin = atob(a.data.split('base64,')[1]);
+            var u8 = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+            blob = new Blob([u8]);
+          } catch(e){ blob = null; }
+        }
+        if (!blob) return null;
+        try { await blob.slice(0, 1).arrayBuffer(); } catch(e){ return null; }
+        return blob;
+      };
+
+      var vids = this.project.assets.videos;
+      for (var vi = 0; vi < vids.length; vi++) {
+        var v = vids[vi];
+        this.showLoader(true, 'Reading video ' + (vi + 1) + '/' + vids.length + ': ' + v.name);
+        var vblob = await resolveBlob(v);
+        var vpath = v.id + '_' + v.name.replace(/[\\/]/g,'_');
+        if (vblob) {
+          videosFolder.file(vpath, vblob);
+          if (v.thumb && v.thumb.indexOf('base64,') > -1) {
+            videosFolder.file(vpath + '.thumb.jpg', v.thumb.split('base64,')[1], { base64: true });
+          }
+        } else {
+          missing.push(v.name);
+        }
+      }
+
+      var imgs = this.project.assets.images;
+      for (var ii = 0; ii < imgs.length; ii++) {
+        var im = imgs[ii];
+        var iblob = await resolveBlob(im);
+        var ipath = im.id + '_' + im.name.replace(/[\\/]/g,'_');
+        if (iblob) imagesFolder.file(ipath, iblob);
+        else missing.push(im.name);
+      }
+
+      var totalAssets = vids.length + imgs.length;
+      if (totalAssets > 0 && missing.length === totalAssets) {
+        this.showLoader(false);
+        alert("None of the media could be read.\n\nThis almost always means the project was reopened after a page reload — browsers can't keep video files in memory across reloads.\n\nUse Load to reopen your saved .zip, then export again.");
+        return;
+      }
+
+      zip.file('project.json', JSON.stringify(projectData, null, 2));
+
+      // STORE (ingen deflate): mp4/webm/jpg/png er allerede komprimeret, så
+      // deflate koster bare CPU og RAM. streamFiles holder hukommelsen nede.
+      var blobOut = await zip.generateAsync({ type: 'blob', streamFiles: true, compression: 'STORE' });
+
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blobOut);
+      a.download = fileName;
+      a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 4000);
+
+      this.showLoader(false);
+      if (missing.length) {
+        this.showStatus('Saved — ' + missing.length + ' unreadable file(s) skipped');
+        alert("Saved, but these files couldn't be read and were left out:\n\n• " + missing.join("\n• ") + "\n\nRe-add them in Assets (or Load the original .zip), then export again.");
+      } else {
+        this.showStatus('Saved as ' + fileName);
+      }
+    } catch(err) {
+      this.showLoader(false);
+      console.error('Export/save failed:', err);
+      var reason = (err && err.message) ? err.message : String(err);
+      var hint = '';
+      if (typeof JSZip === 'undefined' || /JSZip/i.test(reason)) {
+        hint = "\n\nThe zip engine didn't load — check your internet connection (or the vendor/jszip.min.js file if self-hosted) and try again.";
+      } else if (/quota|storage/i.test(reason)) {
+        hint = "\n\nYour browser may be out of storage space for a project this large. Freeing up disk space or exporting fewer/smaller videos at once may help.";
+      } else {
+        hint = "\n\nNothing was saved. Your project is still open and unchanged — try again, and if it keeps failing, use Save (.lxr) instead of Export while you report this.";
+      }
+      alert('Could not finish exporting: ' + reason + hint);
+    }
+  },
+  
+  load: function() { document.getElementById('loader').click(); },
+  
+  loadFile: function(e) {
+    var file = e.target.files[0];
+    if(!file) return;
+    
+    var self = this;
+    this.showLoader(true, 'Extracting project files...');
+    
+    var reader = new FileReader();
+    reader.onload = function(evt) {
+      JSZip.loadAsync(evt.target.result).then(function(zip) {
+        // Simpelt værn mod zip-bomber og defekte filer, før noget læses.
+        if (Object.keys(zip.files).length > 500) { self.showLoader(false); alert('This .zip has too many files.'); return; }
+        var pj = zip.file('project.json');
+        if (!pj) { self.showLoader(false); alert('Not a LærbarXR project — no project.json in the .zip.'); return; }
+        pj.async('string').then(function(projectStr) {
+          var loadedProject = JSON.parse(projectStr);
+          if (!loadedProject || typeof loadedProject !== 'object' || !Array.isArray(loadedProject.nodes) || !loadedProject.startNode) {
+            throw new Error('invalid');
+          }
+          if (!loadedProject.assets) loadedProject.assets = { videos: [], images: [] };
+          if (!loadedProject.assets.videos) loadedProject.assets.videos = [];
+          if (!loadedProject.assets.images) loadedProject.assets.images = [];
+          var promises = [];
+          var missing = [];
+
+          loadedProject.assets.videos.forEach(function(video) {
+            // Kun medier hvis sti bliver inden for videos/.
+            var vsafe = safeZipPath(video.file, 'videos/');
+            var f = vsafe ? zip.file(vsafe) : null;
+            if(f) {
+                var p = f.async('blob').then(function(blob) {
+                    // MIME ud fra filendelsen, så WebM/MOV også virker.
+                    var vext = (video.name.split('.').pop() || '').toLowerCase();
+                    var vmime = vext === 'webm' ? 'video/webm' : (vext === 'mov' ? 'video/quicktime' : 'video/mp4');
+                    video.fileObj = new File([blob], video.name, { type: vmime });
+                    video.url = URL.createObjectURL(video.fileObj);
+                    var thumbFile = zip.file(video.file + '.thumb.jpg');
+                    if(thumbFile) {
+                        return thumbFile.async('base64').then(function(thumbData) {
+                            video.thumb = 'data:image/jpeg;base64,' + thumbData;
+                        });
+                    } else {
+                        return self.generateThumb(video.url).then(t => { video.thumb = t; });
+                    }
+                });
+                promises.push(p);
+            } else {
+                missing.push(video.name);
+            }
+          });
+          
+          loadedProject.assets.images.forEach(function(img) {
+            var isafe = safeZipPath(img.file, 'images/');
+            var f = isafe ? zip.file(isafe) : null;
+            if(f) {
+                var mimeType = img.name.endsWith('.png') ? 'image/png' : 'image/jpeg';
+                var p = f.async('blob').then(function(blob) {
+                    img.fileObj = new File([blob], img.name, {type: mimeType});
+                    img.url = URL.createObjectURL(img.fileObj);
+                });
+                promises.push(p);
+            } else {
+                missing.push(img.name);
+            }
+          });
+          
+          Promise.all(promises).then(function() {
+            // Opgradering af ældre projekter
+            loadedProject.nodes.forEach(function(node) {
+              if(!node.textOverlays) node.textOverlays = [];
+              // Håndredigerede eller fremmede filer kan mangle choices. Vores egne
+              // eksporter skriver altid choices: [].
+              if(!Array.isArray(node.choices)) node.choices = [];
+              if(!node.imageOverlays) {
+                  if(node.images && node.images.length > 0 && typeof node.images[0] === 'string') {
+                      node.imageOverlays = node.images.map(imgId => ({ imageId: imgId, time: 0, duration: 5, x: 50, y: 50, scale: 1 }));
+                  } else {
+                      node.imageOverlays = [];
+                  }
+                  delete node.images;
+              }
+              if(!node.defaultNext && node.nextNode) { node.defaultNext = node.nextNode; delete node.nextNode; }
+            });
+
+            // Valider alle tal og farver fra filen, før projektet når DOM'en.
+            sanitizeProject(loadedProject);
+
+            // Projekter fra før kugle-koordinaterne konverteres her, én gang.
+            // Alle overlays peger i samme retning som før. Indtil et projekt
+            // åbnes her, bevarer det sit gamle system og ser ud som før.
+            var migrated = migrateCoordSpace(loadedProject);
+
+            // Frigiv det gamle projekts object-URL'er, ellers lækker hukommelse,
+            // når flere projekter åbnes i samme session.
+            (self.project.assets.videos || []).forEach(function(v){
+              if (v.url && v.url.indexOf('blob:') === 0) URL.revokeObjectURL(v.url);
+            });
+            (self.project.assets.images || []).forEach(function(i){
+              if (i.url && i.url.indexOf('blob:') === 0) URL.revokeObjectURL(i.url);
+            });
+
+            self.project = loadedProject;
+            self._assetsNeedRelink = missing.length > 0;
+            document.getElementById('projectTitle').value = self.project.title;
+            
+            self.renderCanvas();
+            self.updateStats();
+            self.updateAssetLists();
+            self.deselect();
+
+            // Vis hele grafen med det samme.
+            self.fitView();
+            
+            // Nulstil historik
+            self.history = [];
+            self.historyIndex = -1;
+            self.saveState();
+            
+            self.showLoader(false);
+            // Sig til, hvis projektet henviser til filer, der mangler i zip'en.
+            if (missing.length) {
+              self.showStatus(missing.length + ' asset(s) missing from the project file');
+              alert("These files were referenced but not found in the .zip:\n\n• " + missing.join("\n• "));
+            } else if (migrated) {
+              self.showStatus('Project loaded and opdateret til fuld 360°-placering — gem/eksportér for at beholde det');
+            } else {
+              self.showStatus('Project loaded successfully');
+            }
+          });
+        }).catch(function(err) {
+          self.showLoader(false);
+          alert('Invalid project structure');
+        });
+      }).catch(function(err) {
+        self.showLoader(false);
+        alert('Could not read ZIP file');
+      });
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = '';
+  },
+  
+  export: function() {
+    // Som Gem, men altid med .zip
+    return this.save(true);
+  }
+};
+
+window.addEventListener('DOMContentLoaded', function() { App.init(); });
+</script>
+</body>
+</html>
